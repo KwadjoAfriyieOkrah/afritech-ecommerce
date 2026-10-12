@@ -1,0 +1,192 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum Role {
+  CUSTOMER
+  ADMIN
+  DELIVERY
+}
+
+enum PaymentStatus {
+  PENDING
+  PAID
+  FAILED
+}
+
+enum FulfillmentStatus {
+  PENDING
+  PACKAGING
+  DISPATCHED
+  DELIVERED
+}
+
+enum InventoryReason {
+  ORDER
+  RESTOCK
+  ADJUSTMENT
+}
+
+enum ProductCategory {
+  IPHONE
+  SAMSUNG
+  LAPTOP
+}
+
+model User {
+  id           String   @id @default(cuid())
+  name         String
+  email        String   @unique
+  phone        String?
+  passwordHash String
+  role         Role     @default(CUSTOMER)
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  orders       Order[]
+  rider        Rider?
+  adminLogs    AdminLog[]
+}
+
+model Product {
+  id          String   @id @default(cuid())
+  name        String
+  brand       String           // Apple, Samsung, etc.
+  category    ProductCategory  // iPhone, Samsung, Laptop
+  description String?
+  specs       Json?
+  basePrice   Decimal  @db.Decimal(10, 2)
+  images      String[]
+  isActive    Boolean  @default(true)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  colors      Color[]
+  orderItems  OrderItem[]
+  dailySales  DailySale[]
+}
+
+model Color {
+  id        String   @id @default(cuid())
+  productId String
+  name      String
+  hex       String?
+  stock     Int      @default(0)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  product       Product        @relation(fields: [productId], references: [id], onDelete: Cascade)
+  orderItems    OrderItem[]
+  inventoryLogs InventoryLog[]
+
+  @@unique([productId, name])
+  @@index([productId])
+}
+
+model Order {
+  id              String            @id @default(cuid())
+  reference       String            @unique // productId + date + time, used for admin filtering and rider assignment
+  userId          String?           // null for guest checkout
+  customerName    String
+  customerEmail   String
+  customerPhone   String
+  region          String            // Greater Accra, other regions, etc.
+  address         String
+  deliveryFee     Decimal           @db.Decimal(10, 2)
+  total           Decimal           @db.Decimal(10, 2)
+  paymentStatus   PaymentStatus     @default(PENDING)
+  fulfillment     FulfillmentStatus @default(PENDING)
+  paystackRef     String?           @unique // enforces idempotency on webhooks
+  paidAt          DateTime?
+  riderId         String?
+  createdAt       DateTime          @default(now())
+  updatedAt       DateTime          @updatedAt
+
+  user       User?       @relation(fields: [userId], references: [id])
+  rider      Rider?      @relation(fields: [riderId], references: [id])
+  items      OrderItem[]
+  inventory  InventoryLog[]
+  dailySales DailySale[]
+
+  @@index([paymentStatus, createdAt])
+  @@index([fulfillment])
+  @@index([riderId])
+}
+
+model OrderItem {
+  id        String   @id @default(cuid())
+  orderId   String
+  productId String
+  colorId   String
+  quantity  Int
+  unitPrice Decimal  @db.Decimal(10, 2)
+
+  order   Order   @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  product Product @relation(fields: [productId], references: [id])
+  color   Color   @relation(fields: [colorId], references: [id])
+
+  @@index([orderId])
+}
+
+model Rider {
+  id        String   @id @default(cuid())
+  name      String
+  phone     String
+  userId    String?  @unique // optional login for the delivery role
+  isActive  Boolean  @default(true)
+  createdAt DateTime @default(now())
+
+  user   User?   @relation(fields: [userId], references: [id])
+  orders Order[]
+}
+
+model AdminLog {
+  id        String   @id @default(cuid())
+  adminId   String
+  action    String
+  entity    String
+  entityId  String?
+  meta      Json?
+  createdAt DateTime @default(now())
+
+  admin User @relation(fields: [adminId], references: [id])
+
+  @@index([createdAt])
+}
+
+model InventoryLog {
+  id        String          @id @default(cuid())
+  colorId   String
+  change    Int
+  reason    InventoryReason
+  orderId   String?
+  note      String?
+  createdAt DateTime        @default(now())
+
+  color Color  @relation(fields: [colorId], references: [id])
+  order Order? @relation(fields: [orderId], references: [id])
+
+  @@index([colorId, createdAt])
+}
+
+// Written once per paid order item and never updated or deleted by the app.
+model DailySale {
+  id        String   @id @default(cuid())
+  orderId   String
+  productId String
+  saleDate  DateTime @db.Date
+  quantity  Int
+  amount    Decimal  @db.Decimal(10, 2)
+  createdAt DateTime @default(now())
+
+  order   Order   @relation(fields: [orderId], references: [id])
+  product Product @relation(fields: [productId], references: [id])
+
+  @@index([saleDate])
+  @@index([productId, saleDate])
+}

@@ -1,0 +1,127 @@
+import { PrismaClient, ProductCategory, Role } from "@prisma/client";
+import bcrypt from "bcryptjs";
+
+const prisma = new PrismaClient();
+
+// Development-only seed credential. Never reuse for production; real admin
+// passwords must be set through the auth flow, not committed.
+const SEED_ADMIN_EMAIL = "admin@afritech.com";
+const SEED_ADMIN_PASSWORD = "ChangeMe-S0on!"; // hashed before storage
+
+async function upsertAdmin(): Promise<void> {
+  const passwordHash = await bcrypt.hash(SEED_ADMIN_PASSWORD, 10);
+
+  await prisma.user.upsert({
+    where: { email: SEED_ADMIN_EMAIL },
+    update: {}, // keep existing record untouched on re-seed
+    create: {
+      name: "AFriTech Admin",
+      email: SEED_ADMIN_EMAIL,
+      passwordHash,
+      role: Role.ADMIN,
+    },
+  });
+}
+
+// Product.name is not unique in the schema, so a true upsert has no natural
+// key to target. Find-or-create keeps the seed idempotent by name.
+async function upsertProduct(input: {
+  name: string;
+  brand: string;
+  category: ProductCategory;
+  basePrice: string;
+  description: string;
+}): Promise<{ id: string }> {
+  const existing = await prisma.product.findFirst({
+    where: { name: input.name },
+    select: { id: true },
+  });
+
+  if (existing) {
+    return existing;
+  }
+
+  return prisma.product.create({
+    data: {
+      name: input.name,
+      brand: input.brand,
+      category: input.category,
+      description: input.description,
+      basePrice: input.basePrice,
+      images: [],
+    },
+    select: { id: true },
+  });
+}
+
+async function upsertColor(input: {
+  productId: string;
+  name: string;
+  hex: string;
+  stock: number;
+}): Promise<void> {
+  await prisma.color.upsert({
+    where: {
+      productId_name: { productId: input.productId, name: input.name },
+    },
+    update: { stock: input.stock, hex: input.hex },
+    create: input,
+  });
+}
+
+async function main(): Promise<void> {
+  await upsertAdmin();
+
+  const iphone = await upsertProduct({
+    name: "iPhone 15 Pro",
+    brand: "Apple",
+    category: ProductCategory.IPHONE,
+    basePrice: "14299.00",
+    description: "Apple flagship iPhone with titanium frame and A17 Pro chip.",
+  });
+
+  await upsertColor({
+    productId: iphone.id,
+    name: "Natural Titanium",
+    hex: "#e3e1dc",
+    stock: 12,
+  });
+  await upsertColor({
+    productId: iphone.id,
+    name: "Black Titanium",
+    hex: "#42414d",
+    stock: 15,
+  });
+
+  const samsung = await upsertProduct({
+    name: "Samsung Galaxy S24",
+    brand: "Samsung",
+    category: ProductCategory.SAMSUNG,
+    basePrice: "8499.00",
+    description: "Samsung flagship with Galaxy AI and a 6.2in flat display.",
+  });
+
+  await upsertColor({
+    productId: samsung.id,
+    name: "Onyx Black",
+    hex: "#1f2022",
+    stock: 18,
+  });
+  await upsertColor({
+    productId: samsung.id,
+    name: "Cobalt Violet",
+    hex: "#8e8cd8",
+    stock: 10,
+  });
+}
+
+main()
+  .then(async () => {
+    await prisma.$disconnect();
+  })
+  .catch(async (error: unknown) => {
+    // eslint-disable-next-line no-console
+    console.error("Seeding failed:", error);
+    await prisma.$disconnect();
+    process.exit(1);
+  });

@@ -1,0 +1,38 @@
+{
+  "name": "afritech-backend",
+  "version": "0.1.0",
+  "private": true,
+  "description": "AFriTech e-commerce and POS backend (Express + TypeScript + Prisma)",
+  "main": "dist/src/server.js",
+  "scripts": {
+    "dev": "tsx watch src/server.ts",
+    "build": "tsc -p tsconfig.json",
+    "start": "node dist/src/server.js",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "db:generate": "prisma generate",
+    "db:migrate": "prisma migrate dev",
+    "db:deploy": "prisma migrate deploy",
+    "db:seed": "prisma db seed"
+  },
+  "prisma": {
+    "seed": "tsx prisma/seed.ts"
+  },
+  "dependencies": {
+    "@prisma/client": "^6.19.3",
+    "bcryptjs": "^3.0.3",
+    "cors": "^2.8.6",
+    "dotenv": "^18.0.7",
+    "express": "^4.21.2",
+    "jsonwebtoken": "^9.0.3",
+    "zod": "^4.6.5"
+  },
+  "devDependencies": {
+    "@types/cors": "^2.8.19",
+    "@types/express": "^4.17.25",
+    "@types/jsonwebtoken": "^9.0.10",
+    "@types/node": "^20.19.43",
+    "prisma": "^6.12.0",
+    "tsx": "^4.23.15",
+    "typescript": "^5.9.3"
+  }
+}

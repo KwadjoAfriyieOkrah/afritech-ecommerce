@@ -1,0 +1,10 @@
+node_modules/
+dist/
+
+# Local environment files. Never commit real secrets.
+.env
+.env.local
+.env.*.local
+
+# Keep the example file tracked.
+!.env.example
