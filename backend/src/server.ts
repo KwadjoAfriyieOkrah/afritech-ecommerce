@@ -5,6 +5,7 @@ import { env } from "./lib/env";
 import { prisma } from "./lib/prisma";
 import productsRouter from "./routes/products";
 import authRouter from "./routes/auth.routes";
+import ordersRouter from "./routes/orders.routes";
 
 const app = express();
 app.use(cors({ origin: env.FRONTEND_URL }));
@@ -16,6 +17,7 @@ app.get("/health", (_req, res) => {
 
 app.use("/products", productsRouter);
 app.use("/auth", authRouter);
+app.use("/orders", ordersRouter);
 
 const server = app.listen(env.PORT, () => {
   // eslint-disable-next-line no-console
