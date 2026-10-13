@@ -23,7 +23,7 @@ export type OrderStatusResponse =
 export interface OrderResponse {
   id: string;
   reference: string;
-  userId: string;
+  userId: string | null;
   items: OrderItemResponse[];
   subtotal: number;
   deliveryFee: number;

@@ -104,6 +104,8 @@ model Order {
   paystackRef     String?           @unique // enforces idempotency on webhooks
   paidAt          DateTime?
   riderId         String?
+  reservedUntil   DateTime?         // set on creation; null once paid or released
+  idempotencyKey  String?           @unique // client-generated per checkout attempt
   createdAt       DateTime          @default(now())
   updatedAt       DateTime          @updatedAt
 
@@ -172,6 +174,25 @@ model InventoryLog {
   order Order? @relation(fields: [orderId], references: [id])
 
   @@index([colorId, createdAt])
+}
+
+model DeliveryZone {
+  id           String   @id @default(cuid())
+  name         String   @unique // "Accra", "Tema", "Kumasi", "Cape Coast", "Tamale", "Other regions"
+  fee          Decimal  @db.Decimal(10, 2)
+  expectedDays Int
+  isActive     Boolean  @default(true)
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+}
+
+// One row per UTC day, used to allocate sequential order numbers for that day.
+model OrderCounter {
+  id         String   @id @default(cuid())
+  date       DateTime @db.Date @unique
+  lastNumber Int      @default(0)
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
 }
 
 // Written once per paid order item and never updated or deleted by the app.

@@ -69,8 +69,37 @@ async function upsertColor(input: {
   });
 }
 
+async function upsertDeliveryZone(input: {
+  name: string;
+  fee: string;
+  expectedDays: number;
+  isActive: boolean;
+}): Promise<void> {
+  await prisma.deliveryZone.upsert({
+    where: { name: input.name },
+    update: {
+      fee: input.fee,
+      expectedDays: input.expectedDays,
+      isActive: input.isActive,
+    },
+    create: input,
+  });
+}
+
 async function main(): Promise<void> {
   await upsertAdmin();
+
+  await upsertDeliveryZone({ name: "Accra", fee: "20.00", expectedDays: 1, isActive: true });
+  await upsertDeliveryZone({ name: "Tema", fee: "30.00", expectedDays: 1, isActive: true });
+  await upsertDeliveryZone({ name: "Kumasi", fee: "50.00", expectedDays: 3, isActive: true });
+  await upsertDeliveryZone({ name: "Cape Coast", fee: "50.00", expectedDays: 3, isActive: true });
+  await upsertDeliveryZone({ name: "Tamale", fee: "80.00", expectedDays: 3, isActive: true });
+  await upsertDeliveryZone({
+    name: "Other regions",
+    fee: "80.00",
+    expectedDays: 3,
+    isActive: true,
+  });
 
   const iphone = await upsertProduct({
     name: "iPhone 15 Pro",
