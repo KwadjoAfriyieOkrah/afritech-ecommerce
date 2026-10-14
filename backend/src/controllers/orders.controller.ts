@@ -4,6 +4,7 @@ import type { ZodError } from "zod";
 import { UNAUTHORIZED_MESSAGE } from "../middleware/requireAuth";
 import {
   createOrder,
+  getOrderForUser,
   InsufficientStockError,
   InvalidItemError,
   listOrdersForUser,
@@ -16,6 +17,20 @@ import {
 
 const MIN_IDEMPOTENCY_KEY_LENGTH = 16;
 const MAX_IDEMPOTENCY_KEY_LENGTH = 64;
+const MAX_ORDER_ID_LENGTH = 64;
+
+// Single source for the not-found body. Every miss path (unknown id, another
+// user's order, guest order, malformed id) sends this exact object so the
+// responses stay byte-identical and cannot leak ownership.
+const ORDER_NOT_FOUND_BODY: { error: string } = { error: "Order not found" };
+
+function isValidOrderId(value: unknown): value is string {
+  return (
+    typeof value === "string" &&
+    value.length > 0 &&
+    value.length <= MAX_ORDER_ID_LENGTH
+  );
+}
 
 function readIdempotencyKey(req: Request): string | null {
   const raw = req.headers["idempotency-key"];
@@ -50,6 +65,31 @@ export async function listOrders(req: Request, res: Response): Promise<void> {
   } catch (error) {
     console.error("Failed to list orders:", error);
     res.status(500).json({ error: "Could not load orders" });
+  }
+}
+
+export async function getOrder(req: Request, res: Response): Promise<void> {
+  const user = req.authUser;
+  if (!user) {
+    res.status(401).json({ error: UNAUTHORIZED_MESSAGE });
+    return;
+  }
+
+  try {
+    const rawId: unknown = req.params.id;
+    const order = isValidOrderId(rawId)
+      ? await getOrderForUser(user.id, rawId)
+      : null;
+
+    if (!order) {
+      res.status(404).json(ORDER_NOT_FOUND_BODY);
+      return;
+    }
+
+    res.status(200).json(order);
+  } catch (error) {
+    console.error("Failed to load order:", error);
+    res.status(500).json({ error: "Could not load order" });
   }
 }
 

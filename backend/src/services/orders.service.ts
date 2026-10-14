@@ -253,6 +253,21 @@ export async function listOrdersForUser(
   return orders.map((order) => mapOrder(order, expectedDaysByRegion));
 }
 
+export async function getOrderForUser(
+  userId: string,
+  orderId: string,
+): Promise<OrderResponse | null> {
+  const order = await prisma.order.findFirst({
+    where: { id: orderId, userId },
+    select: orderSelect,
+  });
+
+  if (!order) return null;
+
+  const expectedDaysByRegion = await loadExpectedDeliveryDays([order.region]);
+  return mapOrder(order, expectedDaysByRegion);
+}
+
 interface ResolvedLine {
   productId: string;
   colorId: string;
