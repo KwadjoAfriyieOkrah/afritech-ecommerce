@@ -4,7 +4,13 @@ import { useCallback, useMemo, useRef, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { HiOutlineCheckCircle, HiOutlineCreditCard, HiOutlineLockClosed } from 'react-icons/hi';
 import { toast } from 'sonner';
-import { ApiError, createOrder, initializePayment, verifyOrderPayment } from '@/services/api';
+import {
+  ApiError,
+  createOrder,
+  initializePayment,
+  verifyOrderPayment,
+  type DeliveryZone
+} from '@/services/api';
 import {
   clearCheckoutIdempotencyKey,
   getCheckoutIdempotencyKey
@@ -14,7 +20,7 @@ import { OrderStatus, type DeliveryInfo, type Order, type PaymentAttempt } from 
 import { ErrorBoundary } from '@/components/shared/ErrorBoundary';
 import { formatCedis } from '@/utils/format';
 import { resolveReference } from '@/utils/orderReference';
-import { calculateDeliveryFee, validateEmail } from '@/utils/validators';
+import { validateEmail } from '@/utils/validators';
 
 const PAYSTACK_PUBLIC_KEY = process.env.NEXT_PUBLIC_PAYSTACK_PUBLIC_KEY ?? '';
 
@@ -23,11 +29,12 @@ function isUsableKey(key: string): boolean {
 }
 
 interface PaymentFormProps {
+  zones: DeliveryZone[];
   deliveryInfo: DeliveryInfo;
   onProcessingChange?: (processing: boolean) => void;
 }
 
-export function PaymentForm({ deliveryInfo, onProcessingChange }: PaymentFormProps) {
+export function PaymentForm({ zones, deliveryInfo, onProcessingChange }: PaymentFormProps) {
   const router = useRouter();
 
   const items = useCartStore((state) => state.items);
@@ -61,10 +68,14 @@ export function PaymentForm({ deliveryInfo, onProcessingChange }: PaymentFormPro
     [items]
   );
 
-  const deliveryFee = useMemo(
-    () => (items.length > 0 ? calculateDeliveryFee(deliveryInfo.deliveryArea) : 0),
-    [items.length, deliveryInfo.deliveryArea]
+  const matchedZone = useMemo(
+    () => zones.find((zone) => zone.name === deliveryInfo.deliveryArea),
+    [zones, deliveryInfo.deliveryArea]
   );
+
+  // The area must match a server zone or payment is blocked; no default fee.
+  const deliveryAvailable = Boolean(matchedZone);
+  const deliveryFee = matchedZone ? matchedZone.fee : 0;
 
   const subtotalToShow = order ? order.subtotal : subtotal;
   const deliveryFeeToShow = order ? order.deliveryFee : deliveryFee;
@@ -126,6 +137,11 @@ export function PaymentForm({ deliveryInfo, onProcessingChange }: PaymentFormPro
 
     if (!userId) {
       toast.error('Your session ended. Please sign in again to place the order.');
+      return;
+    }
+
+    if (!deliveryAvailable) {
+      toast.error('Delivery is not available to this area.');
       return;
     }
 
@@ -229,6 +245,7 @@ export function PaymentForm({ deliveryInfo, onProcessingChange }: PaymentFormPro
     deliveryInfo,
     email,
     userId,
+    deliveryAvailable,
     setCurrentOrder,
     addToHistory,
     handlePaymentSuccess,
@@ -280,6 +297,13 @@ export function PaymentForm({ deliveryInfo, onProcessingChange }: PaymentFormPro
           })}
         </ul>
 
+        {!order && !deliveryAvailable && (
+          <p className="rounded-lg border border-red-300 bg-red-50 px-4 py-3 text-sm text-red-700">
+            Delivery not available to this area. Go back to delivery details and choose a
+            different area.
+          </p>
+        )}
+
         <dl className="flex flex-col gap-1.5 text-sm">
           <div className="flex justify-between">
             <dt className="text-stone-600">Subtotal</dt>
@@ -287,11 +311,15 @@ export function PaymentForm({ deliveryInfo, onProcessingChange }: PaymentFormPro
           </div>
           <div className="flex justify-between">
             <dt className="text-stone-600">Delivery</dt>
-            <dd className="font-medium text-ink">{formatCedis(deliveryFeeToShow)}</dd>
+            <dd className="font-medium text-ink">
+              {!order && !deliveryAvailable ? '—' : formatCedis(deliveryFeeToShow)}
+            </dd>
           </div>
           <div className="mt-1 flex justify-between border-t border-stone-200 pt-2 text-base">
             <dt className="font-semibold text-ink">Total</dt>
-            <dd className="font-bold text-dark-gold">{formatCedis(totalToShow)}</dd>
+            <dd className="font-bold text-dark-gold">
+              {!order && !deliveryAvailable ? '—' : formatCedis(totalToShow)}
+            </dd>
           </div>
         </dl>
 
@@ -330,13 +358,16 @@ export function PaymentForm({ deliveryInfo, onProcessingChange }: PaymentFormPro
         <button
           type="button"
           onClick={() => void handlePay()}
-          disabled={isBusy || !keyReady || !emailReady}
+          disabled={isBusy || !keyReady || !emailReady || !deliveryAvailable}
           className="btn btn-primary w-full"
         >
           {phase === 'creating' && 'Saving order...'}
           {phase === 'verifying' && 'Verifying payment...'}
           {phase === 'paying' && 'Waiting for payment...'}
-          {phase === 'idle' && `Pay ${formatCedis(totalToShow)} with Paystack`}
+          {phase === 'idle' &&
+            (deliveryAvailable
+              ? `Pay ${formatCedis(totalToShow)} with Paystack`
+              : 'Payment unavailable')}
         </button>
 
         <p className="flex items-center justify-center gap-1.5 text-xs text-stone-500">

@@ -4,10 +4,14 @@ import Link from 'next/link';
 import { useMemo } from 'react';
 import { HiOutlineTrash } from 'react-icons/hi';
 import { useCartStore, useUserStore } from '@/store';
-import { calculateDeliveryFee } from '@/utils/validators';
+import type { DeliveryZone } from '@/services/api';
 import { formatCedis } from '@/utils/format';
 
-export function CartSummary() {
+interface CartSummaryProps {
+  zones: DeliveryZone[];
+}
+
+export function CartSummary({ zones }: CartSummaryProps) {
   const items = useCartStore((state) => state.items);
   const updateQuantity = useCartStore((state) => state.updateQuantity);
   const removeFromCart = useCartStore((state) => state.removeFromCart);
@@ -19,7 +23,11 @@ export function CartSummary() {
     [items]
   );
 
-  const deliveryFee = items.length > 0 ? calculateDeliveryFee(deliveryArea) : 0;
+  const matchedZone = useMemo(
+    () => zones.find((zone) => zone.name === deliveryArea),
+    [zones, deliveryArea]
+  );
+
   const hasDeliveryArea = deliveryArea.trim().length > 0;
 
   if (items.length === 0) {
@@ -123,13 +131,17 @@ export function CartSummary() {
         <div className="flex justify-between">
           <dt className="text-stone-600">Delivery</dt>
           <dd className="font-medium text-ink">
-            {hasDeliveryArea ? formatCedis(deliveryFee) : 'Set at checkout'}
+            {!hasDeliveryArea
+              ? 'Set at checkout'
+              : matchedZone
+                ? formatCedis(matchedZone.fee)
+                : 'Not available'}
           </dd>
         </div>
         <div className="mt-1 flex justify-between border-t border-stone-200 pt-2 text-base">
           <dt className="font-semibold text-ink">Total</dt>
           <dd className="font-bold text-dark-gold">
-            {formatCedis(hasDeliveryArea ? subtotal + deliveryFee : subtotal)}
+            {formatCedis(matchedZone ? subtotal + matchedZone.fee : subtotal)}
           </dd>
         </div>
       </dl>

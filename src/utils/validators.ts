@@ -6,8 +6,6 @@ const FORMATTING_CHARS = /[\s()-]/g;
 
 const ACCRA_AREA = 'Accra';
 
-export const ACCRA_DELIVERY_FEE = 5;
-export const DEFAULT_DELIVERY_FEE = 10;
 export const ACCRA_DELIVERY_DAYS = { min: 1, max: 1 } as const;
 export const DEFAULT_DELIVERY_DAYS = { min: 2, max: 3 } as const;
 
@@ -50,7 +48,7 @@ export function passwordPolicyHint(): string {
 }
 
 export function calculateDeliveryFee(area: string): number {
-  return isAccra(area) ? ACCRA_DELIVERY_FEE : DEFAULT_DELIVERY_FEE;
+  return isAccra(area) ? 5 : 10;
 }
 
 export function calculateDeliveryDays(area: string): DeliveryDayRange {

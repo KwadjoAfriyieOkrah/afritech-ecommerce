@@ -3,30 +3,13 @@
 import { useMemo, useRef, useState, type FormEvent } from 'react';
 import { HiOutlineExclamation } from 'react-icons/hi';
 import { useUserStore } from '@/store';
+import type { DeliveryZone } from '@/services/api';
 import type { DeliveryInfo } from '@/types';
-import {
-  calculateDeliveryDays,
-  calculateDeliveryFee,
-  validateAddress,
-  validateEmail,
-  validatePhoneGH
-} from '@/utils/validators';
+import { validateAddress, validateEmail, validatePhoneGH } from '@/utils/validators';
 import { expectedDeliveryDate, formatCedis, formatDeliveryDays } from '@/utils/format';
 
-export const DELIVERY_AREAS = [
-  'Accra',
-  'Kumasi',
-  'Takoradi',
-  'Tamale',
-  'Cape Coast',
-  'Sunyani',
-  'Ho',
-  'Koforidua',
-  'Bolgatanga',
-  'Wa'
-] as const;
-
 interface DeliveryFormProps {
+  zones: DeliveryZone[];
   onComplete?: (info: DeliveryInfo) => void;
 }
 
@@ -53,7 +36,7 @@ function FieldError({ id, message }: { id: string; message?: string }) {
   );
 }
 
-export function DeliveryForm({ onComplete }: DeliveryFormProps) {
+export function DeliveryForm({ zones, onComplete }: DeliveryFormProps) {
   const loggedInEmail = useUserStore((state) => state.user?.email);
   const deliveryInfo = useUserStore((state) => state.deliveryInfo);
   const updateDeliveryInfo = useUserStore((state) => state.updateDeliveryInfo);
@@ -62,16 +45,20 @@ export function DeliveryForm({ onComplete }: DeliveryFormProps) {
   const [isSubmitting, setIsSubmitting] = useState(false);
   const formRef = useRef<HTMLFormElement>(null);
 
-  const fee = calculateDeliveryFee(deliveryInfo.deliveryArea);
-  const days = calculateDeliveryDays(deliveryInfo.deliveryArea);
+  const matchedZone = useMemo(
+    () => zones.find((zone) => zone.name === deliveryInfo.deliveryArea),
+    [zones, deliveryInfo.deliveryArea]
+  );
 
   const deliveryEstimate = useMemo(() => {
     const area = deliveryInfo.deliveryArea.trim();
 
-    if (!area) return null;
+    if (!area || !matchedZone) return null;
 
-    return `Delivery to ${area} - ${formatCedis(fee)} - ${formatDeliveryDays(days.min, days.max)}`;
-  }, [deliveryInfo.deliveryArea, fee, days.min, days.max]);
+    const days = matchedZone.expectedDays;
+
+    return `Delivery to ${area} - ${formatCedis(matchedZone.fee)} - ${formatDeliveryDays(days, days)}`;
+  }, [deliveryInfo.deliveryArea, matchedZone]);
 
   const errorList = useMemo(
     () => Object.entries(errors).filter(([, message]) => Boolean(message)),
@@ -92,6 +79,8 @@ export function DeliveryForm({ onComplete }: DeliveryFormProps) {
     }
     if (!deliveryInfo.deliveryArea) {
       nextErrors.deliveryArea = 'Choose a delivery area';
+    } else if (!matchedZone) {
+      nextErrors.deliveryArea = 'Delivery is not available to this area';
     }
     if (!validateAddress(deliveryInfo.deliveryAddress)) {
       nextErrors.deliveryAddress = 'Enter a delivery address of at least 5 characters';
@@ -118,14 +107,16 @@ export function DeliveryForm({ onComplete }: DeliveryFormProps) {
 
     setIsSubmitting(true);
 
+    const deliveryDays = matchedZone ? matchedZone.expectedDays : 0;
+
     const completed: DeliveryInfo = {
       customerName: deliveryInfo.customerName.trim(),
       customerPhone: deliveryInfo.customerPhone.trim(),
       customerEmail: deliveryInfo.customerEmail.trim() || loggedInEmail || '',
       deliveryArea: deliveryInfo.deliveryArea,
       deliveryAddress: deliveryInfo.deliveryAddress.trim(),
-      expectedDeliveryDays: days.max,
-      expectedDeliveryDate: expectedDeliveryDate(days.min, days.max)
+      expectedDeliveryDays: deliveryDays,
+      expectedDeliveryDate: expectedDeliveryDate(deliveryDays, deliveryDays)
     };
 
     updateDeliveryInfo(completed);
@@ -247,9 +238,9 @@ export function DeliveryForm({ onComplete }: DeliveryFormProps) {
             aria-describedby={errors.deliveryArea ? 'deliveryArea-error' : undefined}
           >
             <option value="">Select an area</option>
-            {DELIVERY_AREAS.map((area) => (
-              <option key={area} value={area}>
-                {area}
+            {zones.map((zone) => (
+              <option key={zone.name} value={zone.name}>
+                {zone.name}
               </option>
             ))}
           </select>

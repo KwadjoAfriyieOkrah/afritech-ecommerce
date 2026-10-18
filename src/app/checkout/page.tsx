@@ -2,9 +2,10 @@
 
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import { HiOutlineTruck } from 'react-icons/hi';
 import { useCartStore, useUserStore } from '@/store';
+import { ApiError, getDeliveryZones, type DeliveryZone } from '@/services/api';
 import { CartSummary } from '@/components/cart/CartSummary';
 import { DeliveryForm } from '@/components/checkout/DeliveryForm';
 import { PaymentForm } from '@/components/checkout/PaymentForm';
@@ -50,12 +51,27 @@ export default function CheckoutPage() {
   const sessionReady = useUserStore((state) => state.sessionReady);
 
   const [currentStep, setCurrentStep] = useState<CheckoutStep>('delivery');
+  const [zones, setZones] = useState<DeliveryZone[] | null>(null);
+  const [zonesError, setZonesError] = useState<string | null>(null);
 
   // Checkout is authenticated-only, so wait for the session check before
   // deciding. Rendering the skeleton first avoids a redirect flash.
   useEffect(() => {
     if (sessionReady && !user) router.replace('/login');
   }, [sessionReady, user, router]);
+
+  const loadZones = useCallback(async () => {
+    setZonesError(null);
+    try {
+      setZones(await getDeliveryZones());
+    } catch (caught) {
+      setZonesError(ApiError.from(caught).message);
+    }
+  }, []);
+
+  useEffect(() => {
+    void loadZones();
+  }, [loadZones]);
 
   if (!sessionReady) return <CheckoutSkeleton />;
   if (!user) return null;
@@ -68,6 +84,26 @@ export default function CheckoutPage() {
         <Link href="/products" className="btn btn-primary mt-6">
           Shop products
         </Link>
+      </div>
+    );
+  }
+
+  if (zones === null && zonesError === null) {
+    return (
+      <div className="mx-auto w-full max-w-3xl px-4 py-16 text-center sm:px-6" role="status">
+        <p className="text-sm text-stone-500">Loading delivery options...</p>
+      </div>
+    );
+  }
+
+  if (zonesError || zones === null) {
+    return (
+      <div className="mx-auto w-full max-w-3xl px-4 py-16 text-center sm:px-6">
+        <h1 className="text-2xl font-bold text-ink">Could not load delivery options</h1>
+        <p className="mt-2 text-sm text-stone-500">{zonesError}</p>
+        <button type="button" onClick={() => void loadZones()} className="btn btn-primary mt-6">
+          Try again
+        </button>
       </div>
     );
   }
@@ -101,7 +137,7 @@ export default function CheckoutPage() {
         <div>
           <ErrorBoundary title="Checkout failed to load">
             {currentStep === 'delivery' && (
-              <DeliveryForm onComplete={() => setCurrentStep('payment')} />
+              <DeliveryForm zones={zones} onComplete={() => setCurrentStep('payment')} />
             )}
 
             {(currentStep === 'payment' || isProcessing) && (
@@ -135,6 +171,7 @@ export default function CheckoutPage() {
                 )}
 
                 <PaymentForm
+                  zones={zones}
                   deliveryInfo={deliveryInfo}
                   onProcessingChange={(processing) =>
                     setCurrentStep(processing ? 'processing' : 'payment')
@@ -146,7 +183,7 @@ export default function CheckoutPage() {
         </div>
 
         <div className="lg:sticky lg:top-24 lg:self-start">
-          <CartSummary />
+          <CartSummary zones={zones} />
         </div>
       </div>
     </div>

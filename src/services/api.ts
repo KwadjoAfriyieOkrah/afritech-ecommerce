@@ -328,6 +328,24 @@ export async function verifyOrderPayment(
   return data;
 }
 
+export interface DeliveryZone {
+  name: string;
+  fee: number;
+  expectedDays: number;
+}
+
+export async function getDeliveryZones(): Promise<DeliveryZone[]> {
+  if (isMockApiEnabled()) {
+    return [
+      { name: 'Accra', fee: 5, expectedDays: 1 },
+      { name: 'Kumasi', fee: 10, expectedDays: 3 }
+    ];
+  }
+
+  const { data } = await api.get<DeliveryZone[]>('/delivery-zones');
+  return data;
+}
+
 export async function getOrderTracking(id: string): Promise<Order> {
   if (isMockApiEnabled()) return mockGetOrder(id);
 
