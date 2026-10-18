@@ -38,6 +38,36 @@ enum ProductCategory {
   LAPTOP
 }
 
+enum PaymentAttemptStatus {
+  INITIALIZED // reference minted; no trusted provider outcome recorded yet
+  SUCCEEDED   // provider-confirmed success, amount/currency validated
+  FAILED      // definitive provider-reported failure only (never a timeout)
+  ABANDONED   // superseded, cancelled, or reservation released; still resolvable
+  MISMATCH    // provider success whose amount/currency failed validation
+}
+
+enum RefundStatus {
+  NONE
+  PENDING
+  REFUNDED
+  REJECTED
+}
+
+enum ReconciliationReason {
+  UNKNOWN_REFERENCE
+  ORDER_MISSING
+  DUPLICATE_CHARGE
+  PAYMENT_AFTER_EXPIRY
+  AMOUNT_MISMATCH
+  CURRENCY_MISMATCH
+  UNEXPECTED
+}
+
+enum ReconciliationStatus {
+  PENDING
+  RESOLVED
+}
+
 model User {
   id           String   @id @default(cuid())
   name         String
@@ -109,15 +139,70 @@ model Order {
   createdAt       DateTime          @default(now())
   updatedAt       DateTime          @updatedAt
 
-  user       User?       @relation(fields: [userId], references: [id])
-  rider      Rider?      @relation(fields: [riderId], references: [id])
-  items      OrderItem[]
-  inventory  InventoryLog[]
-  dailySales DailySale[]
+  user                User?                @relation(fields: [userId], references: [id])
+  rider               Rider?               @relation(fields: [riderId], references: [id])
+  items               OrderItem[]
+  inventory           InventoryLog[]
+  dailySales          DailySale[]
+  paymentAttempts     PaymentAttempt[]
+  reconciliation       ReconciliationEntry[]
 
   @@index([paymentStatus, createdAt])
   @@index([fulfillment])
   @@index([riderId])
+}
+
+model PaymentAttempt {
+  id                    String                @id @default(cuid())
+  orderId               String
+  reference             String                @unique
+  amountPesewas         BigInt
+  currency              String                @default("GHS")
+  status                PaymentAttemptStatus  @default(INITIALIZED)
+  refundStatus          RefundStatus          @default(NONE)
+  reconciliationReason  ReconciliationReason?
+  providerAmountPesewas BigInt?
+  providerCurrency      String?
+  providerTransactionId String?
+  confirmedAt           DateTime?
+  reconciledAt          DateTime?
+  reconciliationNote    String?
+  createdAt             DateTime              @default(now())
+  updatedAt             DateTime              @updatedAt
+
+  order          Order                @relation(fields: [orderId], references: [id], onDelete: Restrict)
+  reconciliation ReconciliationEntry?
+
+  @@index([orderId])
+  @@index([status])
+  @@index([refundStatus])
+}
+
+// Durable inbox for captured-but-unfulfillable payments and unmatched provider
+// events. Rows are never deleted by the app; operators resolve them explicitly.
+model ReconciliationEntry {
+  id                    String               @id @default(cuid())
+  orderId               String?
+  attemptId             String?              @unique
+  reference             String
+  reason                ReconciliationReason
+  amountPesewas         BigInt?
+  providerCurrency      String?
+  providerTransactionId String?
+  status                ReconciliationStatus @default(PENDING)
+  resolution            String?
+  note                  String?
+  resolvedAt            DateTime?
+  createdAt             DateTime             @default(now())
+  updatedAt             DateTime             @updatedAt
+
+  order   Order?          @relation(fields: [orderId], references: [id], onDelete: SetNull)
+  attempt PaymentAttempt? @relation(fields: [attemptId], references: [id], onDelete: SetNull)
+
+  @@unique([reference, reason])
+  @@index([status])
+  @@index([createdAt])
+  @@index([orderId])
 }
 
 model OrderItem {
