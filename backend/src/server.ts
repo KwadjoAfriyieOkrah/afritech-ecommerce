@@ -8,6 +8,7 @@ import authRouter from "./routes/auth.routes";
 import ordersRouter from "./routes/orders.routes";
 import deliveryZonesRouter from "./routes/delivery-zones.routes";
 import paymentsRouter from "./routes/payments.routes";
+import adminRouter from "./routes/admin.routes";
 import { handlePaystackWebhook } from "./controllers/paystack-webhook.controller";
 import { releaseExpiredReservations } from "./services/reservations.service";
 
@@ -36,6 +37,7 @@ app.use("/auth", authRouter);
 app.use("/orders", ordersRouter);
 app.use("/delivery-zones", deliveryZonesRouter);
 app.use("/payments", paymentsRouter);
+app.use("/admin", adminRouter);
 
 const server = app.listen(env.PORT, () => {
   // eslint-disable-next-line no-console
