@@ -1,11 +1,12 @@
 'use client';
 
 import Link from 'next/link';
-import { useRouter } from 'next/navigation';
 import { useCallback, useEffect, useState } from 'react';
 import { HiOutlineTruck } from 'react-icons/hi';
 import { useCartStore, useUserStore } from '@/store';
 import { ApiError, getDeliveryZones, type DeliveryZone } from '@/services/api';
+import type { DeliveryInfo } from '@/types';
+import { AuthForm } from '@/components/auth/AuthForm';
 import { CartSummary } from '@/components/cart/CartSummary';
 import { DeliveryForm } from '@/components/checkout/DeliveryForm';
 import { PaymentForm } from '@/components/checkout/PaymentForm';
@@ -44,21 +45,16 @@ function CheckoutSkeleton() {
 }
 
 export default function CheckoutPage() {
-  const router = useRouter();
   const items = useCartStore((state) => state.items);
   const deliveryInfo = useUserStore((state) => state.deliveryInfo);
+  const updateDeliveryInfo = useUserStore((state) => state.updateDeliveryInfo);
   const user = useUserStore((state) => state.user);
   const sessionReady = useUserStore((state) => state.sessionReady);
 
   const [currentStep, setCurrentStep] = useState<CheckoutStep>('delivery');
+  const [authMode, setAuthMode] = useState<'login' | 'register'>('login');
   const [zones, setZones] = useState<DeliveryZone[] | null>(null);
   const [zonesError, setZonesError] = useState<string | null>(null);
-
-  // Checkout is authenticated-only, so wait for the session check before
-  // deciding. Rendering the skeleton first avoids a redirect flash.
-  useEffect(() => {
-    if (sessionReady && !user) router.replace('/login');
-  }, [sessionReady, user, router]);
 
   const loadZones = useCallback(async () => {
     setZonesError(null);
@@ -73,8 +69,19 @@ export default function CheckoutPage() {
     void loadZones();
   }, [loadZones]);
 
+  // Pre-fill the checkout draft from the signed-in account without overwriting
+  // anything the visitor already typed.
+  useEffect(() => {
+    if (!user) return;
+
+    const seed: Partial<DeliveryInfo> = {};
+    if (!deliveryInfo.customerName.trim()) seed.customerName = user.name;
+    if (!deliveryInfo.customerEmail.trim()) seed.customerEmail = user.email;
+    if (!deliveryInfo.customerPhone.trim()) seed.customerPhone = user.phone;
+    if (Object.keys(seed).length > 0) updateDeliveryInfo(seed);
+  }, [user, deliveryInfo, updateDeliveryInfo]);
+
   if (!sessionReady) return <CheckoutSkeleton />;
-  if (!user) return null;
 
   if (items.length === 0) {
     return (
@@ -92,6 +99,42 @@ export default function CheckoutPage() {
     return (
       <div className="mx-auto w-full max-w-3xl px-4 py-16 text-center sm:px-6" role="status">
         <p className="text-sm text-stone-500">Loading delivery options...</p>
+      </div>
+    );
+  }
+
+  // Checkout needs an account, so rather than bouncing to /login we show the
+  // sign-in or create-account step inline and keep the cart and progress.
+  if (!user) {
+    return (
+      <div className="mx-auto w-full max-w-7xl px-4 py-8 sm:px-6">
+        <header className="mb-6">
+          <h1 className="text-2xl font-bold text-ink sm:text-3xl">Checkout</h1>
+          <p className="mt-2 text-sm text-stone-500">
+            Sign in or create an account to finish your order. Your cart is saved.
+          </p>
+        </header>
+
+        <div className="grid gap-6 lg:grid-cols-[minmax(0,1fr)_22rem]">
+          <AuthForm
+            mode={authMode}
+            onSuccess={() => undefined}
+            onSwitchMode={() =>
+              setAuthMode((current) => (current === 'login' ? 'register' : 'login'))
+            }
+          />
+          <div className="lg:sticky lg:top-24 lg:self-start">
+            {zones ? (
+              <CartSummary zones={zones} />
+            ) : (
+              <div className="card h-40 p-6">
+                <div className="skeleton h-5 w-32" />
+                <div className="skeleton mt-4 h-4 w-full" />
+                <div className="skeleton mt-3 h-4 w-full" />
+              </div>
+            )}
+          </div>
+        </div>
       </div>
     );
   }

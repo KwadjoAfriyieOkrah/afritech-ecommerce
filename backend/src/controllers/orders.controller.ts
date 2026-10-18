@@ -5,6 +5,7 @@ import { UNAUTHORIZED_MESSAGE } from "../middleware/requireAuth";
 import {
   createOrder,
   getOrderForUser,
+  IdempotencyKeyConflictError,
   InsufficientStockError,
   InvalidItemError,
   listOrdersForUser,
@@ -114,7 +115,13 @@ export async function submitOrder(req: Request, res: Response): Promise<void> {
     return;
   }
 
-  const userId = req.authUser ? req.authUser.id : null;
+  // requireAuth guarantees a user, but the guard keeps ownership explicit and
+  // narrows the type without a cast.
+  const user = req.authUser;
+  if (!user) {
+    res.status(401).json({ error: UNAUTHORIZED_MESSAGE });
+    return;
+  }
 
   try {
     const result = await createOrder({
@@ -129,7 +136,7 @@ export async function submitOrder(req: Request, res: Response): Promise<void> {
         quantity: item.quantity,
       })),
       idempotencyKey,
-      userId,
+      userId: user.id,
     });
 
     res.status(result.status).json(result.order);
@@ -156,6 +163,13 @@ export async function submitOrder(req: Request, res: Response): Promise<void> {
       res.status(409).json({
         error: "Some items are no longer available",
         details: error.details,
+      });
+      return;
+    }
+
+    if (error instanceof IdempotencyKeyConflictError) {
+      res.status(409).json({
+        error: "This checkout attempt could not be completed. Please try again.",
       });
       return;
     }

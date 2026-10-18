@@ -182,6 +182,15 @@ export function PaymentForm({ zones, deliveryInfo, onProcessingChange }: Payment
     } catch (caught) {
       modalOpen.current = false;
       setStep('idle');
+
+      // A 401 means the session ended. The response interceptor already cleared
+      // the account, so checkout swaps in its sign-in step; point the visitor
+      // there instead of showing the raw server message.
+      if (ApiError.isApiError(caught) && caught.status === 401) {
+        toast.error('Your session ended. Please sign in again to finish your order.');
+        return;
+      }
+
       toast.error(ApiError.from(caught).message);
       return;
     }

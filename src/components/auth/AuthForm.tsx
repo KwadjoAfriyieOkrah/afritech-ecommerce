@@ -7,7 +7,7 @@ import { HiOutlineExclamation, HiOutlineEye, HiOutlineEyeOff } from 'react-icons
 import { toast } from 'sonner';
 import { ApiError, loginUser, registerUser, setAuthToken } from '@/services/api';
 import { useUserStore } from '@/store';
-import type { DeliveryInfo } from '@/types';
+import type { DeliveryInfo, User } from '@/types';
 import {
   passwordPolicyHint,
   validateEmail,
@@ -45,9 +45,11 @@ function FieldError({ id, message }: { id: string; message?: string }) {
 
 interface AuthFormProps {
   mode: Mode;
+  onSuccess?: (user: User) => void;
+  onSwitchMode?: () => void;
 }
 
-export function AuthForm({ mode }: AuthFormProps) {
+export function AuthForm({ mode, onSuccess, onSwitchMode }: AuthFormProps) {
   const router = useRouter();
 
   const user = useUserStore((state) => state.user);
@@ -66,10 +68,12 @@ export function AuthForm({ mode }: AuthFormProps) {
 
   const isRegister = mode === 'register';
 
-  // Already signed in: this page has nothing to do, so go to the account page.
+  // Already signed in: the standalone auth pages have nothing to do, so go to
+  // the account page. Embedded callers (onSuccess provided) handle this
+  // themselves and must not be redirected away from the current step.
   useEffect(() => {
-    if (sessionReady && user) router.replace('/account');
-  }, [sessionReady, user, router]);
+    if (sessionReady && user && !onSuccess) router.replace('/account');
+  }, [sessionReady, user, router, onSuccess]);
 
   const setField = (name: FieldName, value: string) => {
     setFields((current) => ({ ...current, [name]: value }));
@@ -150,7 +154,11 @@ export function AuthForm({ mode }: AuthFormProps) {
             : `Welcome back, ${auth.user.name.split(' ')[0]}!`
         );
 
-        router.replace('/account');
+        if (onSuccess) {
+          onSuccess(auth.user);
+        } else {
+          router.replace('/account');
+        }
       } catch (caught) {
         setFormError(ApiError.from(caught).message);
       } finally {
@@ -309,12 +317,22 @@ export function AuthForm({ mode }: AuthFormProps) {
 
         <p className="text-center text-sm text-stone-500">
           {isRegister ? 'Already have an account?' : "Don't have an account?"}{' '}
-          <Link
-            href={isRegister ? '/login' : '/register'}
-            className="font-semibold text-dark-gold underline-offset-4 hover:underline"
-          >
-            {isRegister ? 'Sign in' : 'Create one'}
-          </Link>
+          {onSwitchMode ? (
+            <button
+              type="button"
+              onClick={onSwitchMode}
+              className="font-semibold text-dark-gold underline-offset-4 hover:underline"
+            >
+              {isRegister ? 'Sign in' : 'Create one'}
+            </button>
+          ) : (
+            <Link
+              href={isRegister ? '/login' : '/register'}
+              className="font-semibold text-dark-gold underline-offset-4 hover:underline"
+            >
+              {isRegister ? 'Sign in' : 'Create one'}
+            </Link>
+          )}
         </p>
       </div>
     </div>
