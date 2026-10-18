@@ -8,6 +8,11 @@ import {
   initializePaymentSchema,
   toPaymentValidationDetails,
 } from "../validation/payments.schemas";
+import { UNAUTHORIZED_MESSAGE } from "../middleware/requireAuth";
+import type {
+  InitializePaymentResponse,
+  VerifyPaymentResponse,
+} from "../types/payments";
 
 const MAX_ORDER_ID_LENGTH = 64;
 const MAX_REFERENCE_LENGTH = 128;
@@ -32,31 +37,49 @@ export async function initializePaymentHandler(
     return;
   }
 
+  // requireAuth guarantees a user; this narrows the type without a cast and
+  // keeps the ownership requirement explicit.
+  const user = req.authUser;
+  if (!user) {
+    res.status(401).json({ error: UNAUTHORIZED_MESSAGE });
+    return;
+  }
+
   if (parsed.data.orderId.length > MAX_ORDER_ID_LENGTH) {
     res.status(404).json(ORDER_NOT_FOUND_BODY);
     return;
   }
 
   try {
-    const result = await initializePayment(parsed.data.orderId);
+    const result = await initializePayment(parsed.data.orderId, user.id);
 
     if (result.kind === "not_found") {
       res.status(404).json(ORDER_NOT_FOUND_BODY);
       return;
     }
 
-    if (result.kind === "provider_unavailable") {
-      res.status(502).json(PROVIDER_UNAVAILABLE_BODY);
+    if (result.kind === "already_paid") {
+      res.status(409).json({ error: "This order is already paid" });
       return;
     }
 
-    res.status(200).json({
-      authorizationUrl: result.authorizationUrl,
+    if (result.kind === "expired") {
+      res.status(409).json({
+        error: "This order can no longer be paid. Please start a new order.",
+      });
+      return;
+    }
+
+    const body: InitializePaymentResponse = {
       reference: result.reference,
-    });
+      amount: result.amount,
+      currency: result.currency,
+      email: result.email,
+    };
+    res.status(200).json(body);
   } catch (error) {
     console.error("Failed to initialize payment:", error);
-    res.status(500).json({ error: "Could not initialize payment" });
+    res.status(500).json({ error: "Could not start payment" });
   }
 }
 
@@ -77,8 +100,14 @@ export async function verifyPaymentHandler(
     return;
   }
 
+  const user = req.authUser;
+  if (!user) {
+    res.status(401).json({ error: UNAUTHORIZED_MESSAGE });
+    return;
+  }
+
   try {
-    const result = await verifyPayment(reference);
+    const result = await verifyPayment(reference, user.id);
 
     if (result.kind === "not_found") {
       res.status(404).json(ORDER_NOT_FOUND_BODY);
@@ -90,10 +119,13 @@ export async function verifyPaymentHandler(
       return;
     }
 
-    res.status(200).json({
+    const body: VerifyPaymentResponse = {
+      verified: result.status === "paid",
+      reference,
       status: result.status,
       orderId: result.orderId,
-    });
+    };
+    res.status(200).json(body);
   } catch (error) {
     console.error("Failed to verify payment:", error);
     res.status(500).json({ error: "Could not verify payment" });

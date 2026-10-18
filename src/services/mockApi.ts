@@ -5,6 +5,7 @@ import {
   type AuthResponse,
   type CreateOrderPayload,
   type Order,
+  type PaymentAttempt,
   type PaymentVerification,
   type Product,
   type ProductFilters,
@@ -211,6 +212,36 @@ export async function mockGetOrder(id: string): Promise<Order> {
   return withCurrentStage(order);
 }
 
+/**
+ * Mints a mock payment attempt for an in-memory order. The reference is the
+ * order reference so `mockVerifyPayment` can resolve it. No backend is
+ * contacted, so this is only reachable when `isMockApiEnabled()` is true.
+ */
+export async function mockInitializePayment(orderId: string): Promise<PaymentAttempt> {
+  await delay();
+
+  const order = getStore().orders.get(orderId);
+  if (!order) {
+    throw mockError('We could not find that order.', 404);
+  }
+  if (order.isPaid) {
+    throw mockError('This order is already paid.', 409);
+  }
+
+  return {
+    reference: order.reference,
+    amount: Math.round(order.totalPrice * 100),
+    currency: 'GHS',
+    email: order.customerEmail
+  };
+}
+
+/**
+ * Simulates a successful verification against the in-memory mock order store.
+ * It never contacts Paystack: mock mode must stay fully separate from the real
+ * payment path, which is verified by the backend. Only reachable when
+ * `isMockApiEnabled()` is true.
+ */
 export async function mockVerifyPayment(reference: string): Promise<PaymentVerification> {
   await delay();
 

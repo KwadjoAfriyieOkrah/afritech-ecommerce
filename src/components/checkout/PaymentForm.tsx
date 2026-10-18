@@ -4,9 +4,13 @@ import { useCallback, useMemo, useRef, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { HiOutlineCheckCircle, HiOutlineCreditCard, HiOutlineLockClosed } from 'react-icons/hi';
 import { toast } from 'sonner';
-import { ApiError, createOrder } from '@/services/api';
+import { ApiError, createOrder, initializePayment, verifyOrderPayment } from '@/services/api';
+import {
+  clearCheckoutIdempotencyKey,
+  getCheckoutIdempotencyKey
+} from '@/services/checkoutAttempt';
 import { useCartStore, useOrderStore, useUserStore } from '@/store';
-import { OrderStatus, type DeliveryInfo, type Order, type PaymentVerification } from '@/types';
+import { OrderStatus, type DeliveryInfo, type Order, type PaymentAttempt } from '@/types';
 import { ErrorBoundary } from '@/components/shared/ErrorBoundary';
 import { formatCedis } from '@/utils/format';
 import { resolveReference } from '@/utils/orderReference';
@@ -32,6 +36,7 @@ export function PaymentForm({ deliveryInfo, onProcessingChange }: PaymentFormPro
   const addToHistory = useOrderStore((state) => state.addToHistory);
   const updateStatus = useOrderStore((state) => state.updateStatus);
   const loggedInEmail = useUserStore((state) => state.user?.email);
+  const userId = useUserStore((state) => state.user?.id);
 
   const [phase, setPhase] = useState<'idle' | 'creating' | 'paying' | 'verifying'>('idle');
   const [order, setOrder] = useState<Order | null>(null);
@@ -67,23 +72,22 @@ export function PaymentForm({ deliveryInfo, onProcessingChange }: PaymentFormPro
 
   const isBusy = phase !== 'idle';
 
-  // Mock flow: trusts Paystack's success callback directly, so no request is
-  // made to /api/orders/verify-payment. Swap back to verifyOrderPayment for real payments.
+  // Paystack's client callback only proves the window closed; it is not proof
+  // of payment. The order is marked paid, the cart and checkout key are
+  // cleared, and the customer is sent to the confirmation page only after the
+  // backend confirms the payment is genuinely paid.
   const handlePaymentSuccess = useCallback(
     async (current: Order, transactionReference: string) => {
       modalOpen.current = false;
       setStep('verifying');
 
       try {
-        const mockSuccessResponse: PaymentVerification = {
-          verified: true,
-          reference: transactionReference,
-          message: 'Payment confirmed (mock).'
-        };
+        const verification = await verifyOrderPayment(transactionReference, current.id);
 
-        if (!mockSuccessResponse.verified) {
+        if (!verification?.verified) {
           throw new ApiError(
-            mockSuccessResponse.message ?? 'We could not confirm the payment yet. Please try again.',
+            verification?.message ??
+              'We could not confirm your payment yet. Your order is saved.',
             402,
             'UNVERIFIED_PAYMENT'
           );
@@ -92,19 +96,21 @@ export function PaymentForm({ deliveryInfo, onProcessingChange }: PaymentFormPro
         const paid: Order = {
           ...current,
           isPaid: true,
-          paymentReference: mockSuccessResponse.reference,
+          paymentReference: verification.reference,
           status: OrderStatus.PAID
         };
-
-        const mockOrderId = paid.id || `mock-${mockSuccessResponse.reference}`;
 
         setCurrentOrder(paid);
         updateStatus(paid.id, paid.status);
         clearCart();
+        // The attempt is definitively finished: the payment is confirmed.
+        clearCheckoutIdempotencyKey();
 
         toast.success('Payment confirmed. Opening your order confirmation...');
-        router.push(`/confirmation/${mockOrderId}`);
+        router.push(`/confirmation/${paid.id}`);
       } catch (caught) {
+        // Keep the cart and the checkout key: the payment is unconfirmed, so
+        // the same attempt can be retried without creating a second order.
         setStep('idle');
         toast.error(ApiError.from(caught).message);
       }
@@ -113,28 +119,44 @@ export function PaymentForm({ deliveryInfo, onProcessingChange }: PaymentFormPro
   );
 
   const handlePay = useCallback(async () => {
-    // `modalOpen` is a ref, so it cannot gate this on render alone.
+    // `modalOpen` is a ref, so it cannot gate this on render alone. It is
+    // claimed synchronously below, before the first await, so a double-click
+    // cannot start a second order creation or a second payment attempt.
     if (phase !== 'idle' || modalOpen.current) return;
 
+    if (!userId) {
+      toast.error('Your session ended. Please sign in again to place the order.');
+      return;
+    }
+
+    modalOpen.current = true;
     setStep('creating');
 
     let created: Order;
 
     try {
-      const response = await createOrder({
-        items: items.map((item) => ({
-          productId: item.productId,
-          quantity: item.quantity,
-          color: item.color,
-          price: item.price
-        })),
-        customerName: deliveryInfo.customerName,
-        customerPhone: deliveryInfo.customerPhone,
-        customerEmail: email,
-        deliveryArea: deliveryInfo.deliveryArea,
-        deliveryAddress: deliveryInfo.deliveryAddress,
-        expectedDeliveryDate: deliveryInfo.expectedDeliveryDate
-      });
+      // Persisted per checkout attempt: a remount or reload after an ambiguous
+      // failure reuses this key so the server replays the same order instead of
+      // creating a second one. It is never rotated to retry a payment: the same
+      // order is reused and only its payment reference is renewed.
+      const idempotencyKey = getCheckoutIdempotencyKey(userId);
+
+      const response = await createOrder(
+        {
+          items: items.map((item) => ({
+            productId: item.productId,
+            quantity: item.quantity,
+            color: item.color,
+            price: item.price
+          })),
+          customerName: deliveryInfo.customerName,
+          customerPhone: deliveryInfo.customerPhone,
+          customerEmail: email,
+          deliveryArea: deliveryInfo.deliveryArea,
+          deliveryAddress: deliveryInfo.deliveryAddress
+        },
+        idempotencyKey
+      );
 
       if (!response?.id) {
         throw new ApiError('The server returned an order without an id.', 500, 'INVALID_ORDER');
@@ -142,6 +164,7 @@ export function PaymentForm({ deliveryInfo, onProcessingChange }: PaymentFormPro
 
       created = { ...response, reference: resolveReference(response.reference) };
     } catch (caught) {
+      modalOpen.current = false;
       setStep('idle');
       toast.error(ApiError.from(caught).message);
       return;
@@ -150,22 +173,36 @@ export function PaymentForm({ deliveryInfo, onProcessingChange }: PaymentFormPro
     setCurrentOrder(created);
     addToHistory(created);
     setOrder(created);
+
+    let attempt: PaymentAttempt;
+
+    try {
+      // The backend owns the reference, the amount and the email. Retrying an
+      // unpaid order returns a fresh reference for the same order, so a
+      // cancelled or failed attempt never needs a second order or new stock.
+      attempt = await initializePayment(created.id);
+    } catch (caught) {
+      modalOpen.current = false;
+      setStep('idle');
+      toast.error(ApiError.from(caught).message);
+      return;
+    }
+
     setStep('paying');
-    modalOpen.current = true;
 
     try {
       const { default: PaystackPop } = await import('@paystack/inline-js');
 
       new PaystackPop().newTransaction({
         key: PAYSTACK_PUBLIC_KEY,
-        email,
-        amount: Math.round(created.totalPrice * 100),
-        currency: 'GHS',
-        ref: created.reference,
+        email: attempt.email,
+        amount: attempt.amount,
+        currency: attempt.currency,
+        ref: attempt.reference,
         metadata: {
           orderId: created.id,
           userId: created.userId,
-          reference: created.reference,
+          reference: attempt.reference,
           source: 'afritech-checkout'
         },
         onSuccess: (transaction) => {
@@ -191,6 +228,7 @@ export function PaymentForm({ deliveryInfo, onProcessingChange }: PaymentFormPro
     items,
     deliveryInfo,
     email,
+    userId,
     setCurrentOrder,
     addToHistory,
     handlePaymentSuccess,

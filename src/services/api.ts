@@ -2,8 +2,9 @@ import axios, { AxiosError, AxiosResponse, InternalAxiosRequestConfig } from 'ax
 import type {
   AuthCredentials,
   AuthResponse,
-  CreateOrderPayload,
+  CreateOrderRequestBody,
   Order,
+  PaymentAttempt,
   PaymentVerification,
   Product,
   ProductFilters,
@@ -19,12 +20,13 @@ import {
   mockFetchUserOrders,
   mockGetOrder,
   mockGetProduct,
+  mockInitializePayment,
   mockLogin,
   mockRegister,
   mockVerifyPayment
 } from './mockApi';
 
-const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:3001';
+const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:4000';
 const AUTH_TOKEN_KEY = 'afritech_token';
 const REQUEST_TIMEOUT_MS = 15000;
 const MAX_RETRIES = 3;
@@ -183,11 +185,74 @@ export async function getProduct(id: string): Promise<Product> {
   return data;
 }
 
-export async function createOrder(data: CreateOrderPayload): Promise<Order> {
-  if (isMockApiEnabled()) return mockCreateOrder(data);
+/**
+ * Idempotency key for a single checkout attempt. The backend requires 16-64
+ * characters and replays the existing order when a key is reused, so callers
+ * must keep this value for every retry of one attempt and mint a fresh one only
+ * for a genuinely new purchase. `getCheckoutIdempotencyKey` in
+ * `./checkoutAttempt` owns that lifecycle; do not call this directly from a
+ * component. Throws rather than falling back to a predictable key when secure
+ * random generation is unavailable.
+ */
+export function createIdempotencyKey(): string {
+  const cryptoApi = globalThis.crypto;
 
-  const { data: order } = await api.post<Order>('/orders', data);
+  if (!cryptoApi) {
+    throw new Error(
+      'Secure random generation is unavailable in this browser, so checkout cannot start safely.'
+    );
+  }
+
+  if (typeof cryptoApi.randomUUID === 'function') {
+    return cryptoApi.randomUUID();
+  }
+
+  if (typeof cryptoApi.getRandomValues !== 'function') {
+    throw new Error(
+      'Secure random generation is unavailable in this browser, so checkout cannot start safely.'
+    );
+  }
+
+  const buffer = new Uint8Array(16);
+  cryptoApi.getRandomValues(buffer);
+  return Array.from(buffer, (byte) => byte.toString(16).padStart(2, '0')).join('');
+}
+
+export async function createOrder(
+  data: CreateOrderRequestBody,
+  idempotencyKey: string
+): Promise<Order> {
+  if (isMockApiEnabled()) {
+    // The mock only echoes a display value; the real request omits this field.
+    return mockCreateOrder({ ...data, expectedDeliveryDate: '' });
+  }
+
+  const { data: order } = await api.post<Order>('/orders', data, {
+    headers: { 'Idempotency-Key': idempotencyKey }
+  });
   return order;
+}
+
+/**
+ * Authorizes a fresh payment attempt for an existing, unpaid order the caller
+ * owns and returns the backend-issued reference (plus the server-authoritative
+ * amount, currency and email) to open Paystack with. Calling it again for the
+ * same order issues a new reference without creating another order.
+ */
+export async function initializePayment(orderId: string): Promise<PaymentAttempt> {
+  // Mock mode keeps the whole order in the browser and never reaches the
+  // backend, so the attempt is minted client-side there only.
+  if (isMockApiEnabled()) return mockInitializePayment(orderId);
+
+  // `baseURL: ''` routes this through the Next.js route handler, which forwards
+  // the caller's credentials to the secured backend. Deliberately not retried:
+  // each successful call issues a new, independent attempt reference.
+  const { data } = await api.post<PaymentAttempt>(
+    '/api/payments/initialize',
+    { orderId },
+    { baseURL: '' }
+  );
+  return data;
 }
 
 export async function getOrder(id: string): Promise<Order> {
@@ -249,6 +314,11 @@ export async function verifyOrderPayment(
   reference: string,
   orderId?: string
 ): Promise<PaymentVerification> {
+  // In mock mode the order only ever exists in this browser's in-memory store,
+  // so verification has to run client-side too. It is isolated from the real
+  // path, which always goes through the route handler to the backend.
+  if (isMockApiEnabled()) return mockVerifyPayment(reference);
+
   // `baseURL: ''` routes this through the Next.js route handler rather than the backend.
   const { data } = await api.post<PaymentVerification>(
     '/api/orders/verify-payment',

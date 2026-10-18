@@ -3,9 +3,9 @@
 import Link from 'next/link';
 import { useParams } from 'next/navigation';
 import { useCallback, useEffect, useState } from 'react';
-import { HiCheck, HiOutlineMap, HiOutlineMail, HiOutlineTruck } from 'react-icons/hi';
+import { HiCheck, HiOutlineClock, HiOutlineMap, HiOutlineMail, HiOutlineTruck } from 'react-icons/hi';
 import { ApiError, getOrder } from '@/services/api';
-import { useOrderStore, useUserStore } from '@/store';
+import { useUserStore } from '@/store';
 import type { Order } from '@/types';
 import { ErrorBoundary } from '@/components/shared/ErrorBoundary';
 import { formatCedis, formatDateTime } from '@/utils/format';
@@ -26,13 +26,13 @@ export default function ConfirmationPage() {
   const params = useParams<{ orderId: string }>();
   const orderId = typeof params?.orderId === 'string' ? params.orderId : '';
 
-  const storedOrder = useOrderStore((state) => state.currentOrder);
   const loggedInEmail = useUserStore((state) => state.user?.email);
 
-  const [order, setOrder] = useState<Order | null>(
-    storedOrder?.id === orderId ? storedOrder : null
-  );
-  const [isLoading, setIsLoading] = useState(storedOrder?.id !== orderId);
+  // The order is loaded only from the server. Local checkout state is never
+  // trusted here, so a pending or abandoned payment can never be shown as
+  // confirmed.
+  const [order, setOrder] = useState<Order | null>(null);
+  const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
   const load = useCallback(async () => {
@@ -89,19 +89,35 @@ export default function ConfirmationPage() {
 
   const referenceDate = parseReferenceDate(order.reference);
   const email = order.customerEmail || loggedInEmail || 'your email address';
+  // `isPaid` is derived from the payment ledger on the backend. The status field
+  // is only "paid" (or a later fulfillment stage) once payment is confirmed; a
+  // pending or failed payment is reported as "pending".
+  const isPaid = order.isPaid;
 
   return (
     <div className="mx-auto w-full max-w-3xl px-4 py-8 sm:px-6">
       <ErrorBoundary title="Confirmation failed to load">
         <div className="flex flex-col items-center gap-3 text-center">
-          <span className="flex h-14 w-14 items-center justify-center rounded-full bg-gold text-ink">
-            <HiCheck className="h-7 w-7" aria-hidden="true" />
+          <span
+            className={`flex h-14 w-14 items-center justify-center rounded-full ${
+              isPaid ? 'bg-gold text-ink' : 'bg-light-gold text-dark-gold'
+            }`}
+          >
+            {isPaid ? (
+              <HiCheck className="h-7 w-7" aria-hidden="true" />
+            ) : (
+              <HiOutlineClock className="h-7 w-7" aria-hidden="true" />
+            )}
           </span>
 
-          <h1 className="text-3xl font-bold text-ink">Order Confirmed!</h1>
+          <h1 className="text-3xl font-bold text-ink">
+            {isPaid ? 'Order Confirmed!' : 'Payment not completed yet'}
+          </h1>
 
           <p className="text-sm text-stone-500">
-            Thanks for shopping with AFriTech. We are getting your order ready.
+            {isPaid
+              ? 'Thanks for shopping with AFriTech. We are getting your order ready.'
+              : 'We have not received a confirmed payment for this order. It is saved, so no items are lost, but it will only be processed once payment is completed.'}
           </p>
 
           <p className="mt-1 flex flex-col items-center gap-1">
@@ -183,10 +199,12 @@ export default function ConfirmationPage() {
             </div>
           </section>
 
-          <p className="flex items-center justify-center gap-2 text-center text-sm text-stone-500">
-            <HiOutlineMail className="h-4 w-4 flex-none" aria-hidden="true" />
-            Confirmation email sent to {email}
-          </p>
+          {isPaid && (
+            <p className="flex items-center justify-center gap-2 text-center text-sm text-stone-500">
+              <HiOutlineMail className="h-4 w-4 flex-none" aria-hidden="true" />
+              Confirmation email sent to {email}
+            </p>
+          )}
 
           <div className="flex flex-col gap-3 sm:flex-row sm:justify-center">
             <Link href={`/tracking/${order.id}`} className="btn btn-primary w-full sm:w-auto">

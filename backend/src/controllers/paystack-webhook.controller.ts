@@ -2,7 +2,7 @@ import { createHmac, timingSafeEqual } from "crypto";
 import type { Request, Response } from "express";
 
 import { env } from "../lib/env";
-import { markOrderPaid } from "../services/payments.service";
+import { settleAttempt } from "../services/payments.service";
 
 const SIGNATURE_HEADER = "x-paystack-signature";
 
@@ -74,12 +74,29 @@ export async function handlePaystackWebhook(
   const currency = typeof data.currency === "string" ? data.currency : "";
 
   try {
-    await markOrderPaid(reference, data.amount, currency, paidAtRaw);
+    await settleAttempt({
+      reference,
+      providerAmount: data.amount,
+      providerCurrency: currency,
+      paidAt: paidAtRaw,
+      providerTransactionId: readTransactionId(data.id),
+      source: "webhook",
+    });
     res.status(200).json({ received: true });
   } catch (error) {
-    console.error("Paystack webhook failed to update the order:", error);
+    console.error("Paystack webhook failed to settle the payment:", error);
     res.status(500).json({ error: "Could not process webhook" });
   }
+}
+
+function readTransactionId(value: unknown): string | null {
+  if (typeof value === "number" && Number.isFinite(value)) {
+    return String(value);
+  }
+  if (typeof value === "string" && value.length > 0) {
+    return value;
+  }
+  return null;
 }
 
 function toPaystackDate(value: unknown): Date | null {

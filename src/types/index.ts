@@ -98,6 +98,13 @@ export type CreateOrderPayload = Omit<DeliveryInfo, 'expectedDeliveryDays'> & {
   items: Array<Pick<OrderItem, 'productId' | 'quantity' | 'color' | 'price'>>;
 };
 
+/**
+ * What checkout actually POSTs to `POST /orders`. `expectedDeliveryDate` is
+ * display-only: the backend derives it from the delivery zone and rejects any
+ * unrecognized field, so it is left out of the request body entirely.
+ */
+export type CreateOrderRequestBody = Omit<CreateOrderPayload, 'expectedDeliveryDate'>;
+
 export interface ProductFilters {
   category?: string;
   search?: string;
@@ -117,6 +124,19 @@ export interface PaymentVerification {
   message?: string;
   orderId?: string;
   updatedStatus?: OrderStatus;
+}
+
+/**
+ * A backend-authorized payment attempt. The reference is generated and stored
+ * by the backend before it is handed to the client; the frontend passes it to
+ * the Paystack inline modal and back to verification, but never chooses it.
+ * Amount (in pesewas) and email are server-authoritative.
+ */
+export interface PaymentAttempt {
+  reference: string;
+  amount: number;
+  currency: string;
+  email: string;
 }
 
 export interface TrackingStage {

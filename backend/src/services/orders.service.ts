@@ -63,7 +63,7 @@ export interface CreateOrderInput {
   deliveryAddress: string;
   items: CreateOrderItemInput[];
   idempotencyKey: string;
-  userId: string | null;
+  userId: string;
 }
 
 export interface CreateOrderResult {
@@ -113,6 +113,16 @@ export class InsufficientStockError extends Error {
     this.name = "InsufficientStockError";
     this.details = details;
     Object.setPrototypeOf(this, InsufficientStockError.prototype);
+  }
+}
+
+// The idempotency key is already attached to an order this user does not own.
+// Carries no order data so nothing about the other customer can leak.
+export class IdempotencyKeyConflictError extends Error {
+  constructor() {
+    super("Idempotency key already belongs to another order");
+    this.name = "IdempotencyKeyConflictError";
+    Object.setPrototypeOf(this, IdempotencyKeyConflictError.prototype);
   }
 }
 
@@ -279,8 +289,8 @@ interface ResolvedLine {
 export async function createOrder(
   input: CreateOrderInput,
 ): Promise<CreateOrderResult> {
-  const existing = await prisma.order.findUnique({
-    where: { idempotencyKey: input.idempotencyKey },
+  const existing = await prisma.order.findFirst({
+    where: { idempotencyKey: input.idempotencyKey, userId: input.userId },
     select: orderSelect,
   });
   if (existing) {
@@ -379,9 +389,17 @@ export async function createOrder(
       const total = subtotal.add(zone.fee);
       const reservedUntil = new Date(now.getTime() + RESERVATION_WINDOW_MS);
 
+      const reference = formatReference(now, counter.lastNumber);
+
       const created = await tx.order.create({
         data: {
-          reference: formatReference(now, counter.lastNumber),
+          reference,
+          // Legacy display reference (shown as paymentReference in API
+          // responses). Set by initializePayment to the reference it mints,
+          // not at checkout. Payments are authorized and resolved through
+          // immutable PaymentAttempt rows, so this column is not the payment
+          // lookup key.
+          paystackRef: null,
           userId: input.userId,
           customerName: input.customerName,
           customerEmail: input.customerEmail,
@@ -429,8 +447,8 @@ export async function createOrder(
     return { status: 201, order: mapOrder(result.order, expectedDaysByRegion) };
   } catch (error) {
     if (isUniqueViolation(error, "idempotencyKey")) {
-      const winner = await prisma.order.findUnique({
-        where: { idempotencyKey: input.idempotencyKey },
+      const winner = await prisma.order.findFirst({
+        where: { idempotencyKey: input.idempotencyKey, userId: input.userId },
         select: orderSelect,
       });
       if (winner) {
@@ -439,6 +457,12 @@ export async function createOrder(
         ]);
         return { status: 200, order: mapOrder(winner, expectedDaysByRegion) };
       }
+
+      // The key exists but is owned by a different user (or a legacy
+      // null-user order). The losing transaction has already rolled back, so
+      // no stock or inventory log from this request survives. Disclose only a
+      // generic conflict; never the other order's existence or contents.
+      throw new IdempotencyKeyConflictError();
     }
     throw error;
   }

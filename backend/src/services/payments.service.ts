@@ -1,16 +1,44 @@
-import { PaymentStatus, Prisma } from "@prisma/client";
+import {
+  PaymentAttemptStatus,
+  PaymentStatus,
+  Prisma,
+  ReconciliationReason,
+} from "@prisma/client";
 
 import { env } from "../lib/env";
 import { prisma } from "../lib/prisma";
 import type { PaymentStatusResponse } from "../types/payments";
+import {
+  MAX_ATTEMPT_ALLOCATION_ATTEMPTS,
+  PAYSTACK_CURRENCY,
+  canRecordSuccess,
+  generateAttemptReference,
+  isRecord,
+  isUniqueViolation,
+  mapPaymentStatus,
+  matchProviderAgainstAttempt,
+  planOrderSettlement,
+  toDecimal,
+  toPaystackDate,
+  toPesewaBigInt,
+  toPesewas,
+  utcDayStart,
+  withTransactionRetry,
+} from "./payment-settlement";
 
 const PAYSTACK_API_BASE = "https://api.paystack.co";
-const PAYSTACK_CURRENCY = "GHS";
 
 export type InitializePaymentOutcome =
-  | { kind: "ok"; authorizationUrl: string; reference: string }
+  | {
+      kind: "ok";
+      reference: string;
+      amount: number;
+      email: string;
+      currency: string;
+    }
   | { kind: "not_found" }
-  | { kind: "provider_unavailable" };
+  | { kind: "already_paid" }
+  | { kind: "expired" };
 
 export type VerifyPaymentOutcome =
   | { kind: "status"; orderId: string; status: PaymentStatusResponse }
@@ -25,61 +53,112 @@ export type MarkOrderPaidOutcome =
   | "expired"
   | "not_pending";
 
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null;
+/**
+ * Every terminal result of attempting to settle a verified provider success.
+ * These are exhaustive so callers (webhook, verify) can map them to HTTP
+ * without guessing.
+ */
+export type SettleOutcome =
+  | "paid"
+  | "duplicate_notification"
+  | "mismatch_notification"
+  | "duplicate_charge"
+  | "after_expiry"
+  | "mismatch"
+  | "unknown_reference"
+  | "order_missing";
+
+export interface SettleAttemptInput {
+  reference: string;
+  providerAmount: unknown;
+  providerCurrency: string;
+  paidAt: Date;
+  providerTransactionId: string | null;
+  source: "webhook" | "verify";
 }
 
-// Money only ever moves through Prisma.Decimal. A hostile payload that is not
-// a finite number or a parseable numeric string becomes null and never reaches
-// a comparison, so it can only block a payment, never approve one.
-function toDecimal(value: unknown): Prisma.Decimal | null {
-  if (typeof value === "number") {
-    return Number.isFinite(value) ? new Prisma.Decimal(value) : null;
-  }
-  if (typeof value === "string" && value.trim() !== "") {
-    try {
-      return new Prisma.Decimal(value);
-    } catch {
-      return null;
-    }
-  }
-  return null;
+interface ReconciliationInput {
+  reference: string;
+  reason: ReconciliationReason;
+  orderId?: string | null;
+  attemptId?: string | null;
+  amountPesewas?: bigint | null;
+  providerCurrency?: string | null;
+  providerTransactionId?: string | null;
+  note?: string | null;
 }
 
-function toPesewas(total: Prisma.Decimal): string {
-  return new Prisma.Decimal(total).times(100).toFixed(0);
-}
-
-function utcDayStart(date: Date): Date {
-  return new Date(
-    Date.UTC(date.getUTCFullYear(), date.getUTCMonth(), date.getUTCDate()),
-  );
-}
-
-function toPaystackDate(value: unknown): Date | null {
-  if (typeof value !== "string") return null;
-  const parsed = new Date(value);
-  return Number.isNaN(parsed.getTime()) ? null : parsed;
-}
-
-function mapPaymentStatus(status: PaymentStatus): PaymentStatusResponse {
-  switch (status) {
-    case PaymentStatus.PAID:
-      return "paid";
-    case PaymentStatus.FAILED:
-      return "failed";
-    case PaymentStatus.PENDING:
-      return "pending";
+function reconciliationNote(reason: ReconciliationReason): string {
+  switch (reason) {
+    case ReconciliationReason.DUPLICATE_CHARGE:
+      return "a separate successful charge arrived after the order was already paid";
+    case ReconciliationReason.PAYMENT_AFTER_EXPIRY:
+      return "payment succeeded after the reservation expired or the order failed";
+    case ReconciliationReason.AMOUNT_MISMATCH:
+      return "provider amount did not match the stored attempt";
+    case ReconciliationReason.CURRENCY_MISMATCH:
+      return "provider currency did not match the stored attempt";
+    case ReconciliationReason.ORDER_MISSING:
+      return "order row was missing during settlement";
+    case ReconciliationReason.UNKNOWN_REFERENCE:
+      return "successful provider event for a reference with no stored attempt";
     default:
-      throw new Error(`Unknown payment status: ${String(status)}`);
+      return "unexpected settlement outcome";
   }
 }
 
+// Persists a durable, actionable reconciliation row. createMany + skipDuplicates
+// makes repeated notifications for the same (reference, reason) a no-op, so a
+// captured payment is recorded exactly once and never silently discarded.
+async function recordReconciliation(
+  tx: Prisma.TransactionClient,
+  input: ReconciliationInput,
+): Promise<void> {
+  await tx.reconciliationEntry.createMany({
+    data: [
+      {
+        reference: input.reference,
+        reason: input.reason,
+        orderId: input.orderId ?? null,
+        attemptId: input.attemptId ?? null,
+        amountPesewas: input.amountPesewas ?? null,
+        providerCurrency: input.providerCurrency ?? null,
+        providerTransactionId: input.providerTransactionId ?? null,
+        note: input.note ?? reconciliationNote(input.reason),
+      },
+    ],
+    skipDuplicates: true,
+  });
+}
+
+// Thrown inside initializePayment's transaction to roll back a claim on an
+// order that stopped being payable between the pre-read and the transaction.
+class OrderUnavailableError extends Error {
+  readonly kind: "not_found" | "expired";
+
+  constructor(kind: "not_found" | "expired") {
+    super(kind);
+    this.name = "OrderUnavailableError";
+    this.kind = kind;
+    Object.setPrototypeOf(this, OrderUnavailableError.prototype);
+  }
+}
+
+/**
+ * Authorizes a new payment attempt for an order the caller owns and mints a
+ * fresh, backend-generated Paystack reference for it. Each call inserts its own
+ * immutable PaymentAttempt row, so concurrent calls cannot invalidate each
+ * other's reference. Amount, currency and email come from the stored order,
+ * never from the request. No provider call happens here. The attempt insert and
+ * the order's legacy paystackRef update commit together, and the paystackRef
+ * update only succeeds while the order is still PENDING.
+ */
 export async function initializePayment(
   orderId: string,
+  userId: string,
 ): Promise<InitializePaymentOutcome> {
-  const order = await prisma.order.findUnique({
-    where: { id: orderId },
+  const order = await prisma.order.findFirst({
+    where: { id: orderId, userId },
     select: {
       id: true,
       reference: true,
@@ -90,80 +169,94 @@ export async function initializePayment(
     },
   });
 
+  // Unknown, another user's, and unreachable orders are indistinguishable.
   if (!order) return { kind: "not_found" };
-  if (order.paymentStatus !== PaymentStatus.PENDING) {
-    return { kind: "not_found" };
+  if (order.paymentStatus === PaymentStatus.PAID) {
+    return { kind: "already_paid" };
   }
+  if (order.paymentStatus !== PaymentStatus.PENDING) {
+    return { kind: "expired" };
+  }
+  // A reservation that has elapsed has already released (or is about to
+  // release) its stock, so it must not become payable again.
   if (
     order.reservedUntil !== null &&
     order.reservedUntil.getTime() < Date.now()
   ) {
-    return { kind: "not_found" };
+    return { kind: "expired" };
   }
 
-  const reference = `${order.reference}-${Date.now()}`;
-  const amount = toPesewas(order.total);
+  const amountPesewas = BigInt(toPesewas(order.total));
 
-  await prisma.order.update({
-    where: { id: order.id },
-    data: { paystackRef: reference },
-  });
-
-  let payload: unknown;
-  try {
-    const response = await fetch(
-      `${PAYSTACK_API_BASE}/transaction/initialize`,
-      {
-        method: "POST",
-        headers: {
-          Authorization: `Bearer ${env.PAYSTACK_SECRET_KEY}`,
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({
-          email: order.customerEmail,
-          amount,
-          currency: PAYSTACK_CURRENCY,
-          reference,
-          callback_url: `${env.FRONTEND_URL}/confirmation/${order.id}`,
-        }),
-      },
-    );
+  for (
+    let attempt = 0;
+    attempt < MAX_ATTEMPT_ALLOCATION_ATTEMPTS;
+    attempt += 1
+  ) {
+    const reference = generateAttemptReference(order.reference);
 
     try {
-      payload = await response.json();
-    } catch {
-      payload = null;
+      await prisma.$transaction(async (tx) => {
+        const claimed = await tx.order.updateMany({
+          where: { id: order.id, paymentStatus: PaymentStatus.PENDING },
+          data: { paystackRef: reference },
+        });
+
+        if (claimed.count === 0) {
+          const current = await tx.order.findUnique({
+            where: { id: order.id },
+            select: { paymentStatus: true },
+          });
+          throw new OrderUnavailableError(current ? "expired" : "not_found");
+        }
+
+        await tx.paymentAttempt.create({
+          data: {
+            orderId: order.id,
+            reference,
+            amountPesewas,
+            currency: PAYSTACK_CURRENCY,
+          },
+        });
+      });
+
+      return {
+        kind: "ok",
+        reference,
+        amount: Number(amountPesewas),
+        email: order.customerEmail,
+        currency: PAYSTACK_CURRENCY,
+      };
+    } catch (error) {
+      // The conditional paystackRef claim missed: the order vanished or left
+      // PENDING (settled, failed, or expired) after the pre-read above. The
+      // whole transaction, including the attempt row, has rolled back.
+      if (error instanceof OrderUnavailableError) {
+        return { kind: error.kind };
+      }
+      // A collision on the unique attempt reference is astronomically unlikely;
+      // retry with a new reference rather than failing the customer.
+      if (isUniqueViolation(error, "reference")) continue;
+      throw error;
     }
-
-    if (!response.ok) {
-      console.error(
-        `Paystack initialize returned HTTP ${response.status}:`,
-        payload,
-      );
-      return { kind: "provider_unavailable" };
-    }
-  } catch (error) {
-    console.error("Paystack initialize request failed:", error);
-    return { kind: "provider_unavailable" };
   }
 
-  if (!isRecord(payload) || payload.status !== true || !isRecord(payload.data)) {
-    console.error("Paystack initialize returned an unexpected payload");
-    return { kind: "provider_unavailable" };
-  }
-
-  const authorizationUrl = payload.data.authorization_url;
-  if (typeof authorizationUrl !== "string" || authorizationUrl.length === 0) {
-    console.error("Paystack initialize response has no authorization_url");
-    return { kind: "provider_unavailable" };
-  }
-
-  return { kind: "ok", authorizationUrl, reference };
+  throw new Error("Could not allocate a unique payment reference");
 }
 
-export async function verifyPayment(
+async function fetchProviderVerification(
   reference: string,
-): Promise<VerifyPaymentOutcome> {
+): Promise<
+  | { kind: "unavailable" }
+  | { kind: "not_success" }
+  | {
+      kind: "success";
+      amount: unknown;
+      currency: string;
+      paidAt: Date;
+      providerTransactionId: string | null;
+    }
+> {
   let httpStatus = 0;
   let payload: unknown = null;
 
@@ -181,7 +274,7 @@ export async function verifyPayment(
     }
   } catch (error) {
     console.error("Paystack verify request failed:", error);
-    return { kind: "provider_unavailable" };
+    return { kind: "unavailable" };
   }
 
   if (httpStatus < 200 || httpStatus >= 300) {
@@ -192,7 +285,10 @@ export async function verifyPayment(
         ? payload.message
         : "no message";
     console.warn(`Paystack verify returned HTTP ${httpStatus}: ${message}`);
-  } else if (
+    return { kind: "not_success" };
+  }
+
+  if (
     isRecord(payload) &&
     isRecord(payload.data) &&
     payload.data.status === "success"
@@ -200,101 +296,406 @@ export async function verifyPayment(
     const paidAt = toPaystackDate(payload.data.paid_at) ?? new Date();
     const currency =
       typeof payload.data.currency === "string" ? payload.data.currency : "";
+    const providerTransactionId = readTransactionId(payload.data.id);
 
-    await markOrderPaid(reference, payload.data.amount, currency, paidAt);
+    return {
+      kind: "success",
+      amount: payload.data.amount,
+      currency,
+      paidAt,
+      providerTransactionId,
+    };
   }
 
-  const order = await prisma.order.findUnique({
-    where: { paystackRef: reference },
-    select: { id: true, paymentStatus: true },
-  });
+  return { kind: "not_success" };
+}
 
-  if (!order) return { kind: "not_found" };
+function readTransactionId(value: unknown): string | null {
+  if (typeof value === "number" && Number.isFinite(value)) {
+    return String(value);
+  }
+  if (typeof value === "string" && value.length > 0) {
+    return value;
+  }
+  return null;
+}
+
+export async function verifyPayment(
+  reference: string,
+  userId: string,
+): Promise<VerifyPaymentOutcome> {
+  // Ownership is part of the query: a reference owned by another user is
+  // indistinguishable from one that does not exist. The attempt row persists,
+  // so a superseded/abandoned reference still resolves.
+  const attempt = await prisma.paymentAttempt.findFirst({
+    where: { reference, order: { userId } },
+    select: {
+      id: true,
+      orderId: true,
+      status: true,
+      order: { select: { paymentStatus: true } },
+    },
+  });
+  if (!attempt) return { kind: "not_found" };
+
+  // Only ask Paystack when a provider result could still change: a terminal
+  // attempt (SUCCEEDED/MISMATCH) or an already-paid order is returned as-is.
+  if (
+    canRecordSuccess(attempt.status) &&
+    attempt.order.paymentStatus !== PaymentStatus.PAID
+  ) {
+    const verification = await fetchProviderVerification(reference);
+
+    if (verification.kind === "unavailable") {
+      return { kind: "provider_unavailable" };
+    }
+
+    if (verification.kind === "success") {
+      await settleAttempt({
+        reference,
+        providerAmount: verification.amount,
+        providerCurrency: verification.currency,
+        paidAt: verification.paidAt,
+        providerTransactionId: verification.providerTransactionId,
+        source: "verify",
+      });
+    }
+  }
+
+  const current = await prisma.order.findUnique({
+    where: { id: attempt.orderId },
+    select: { paymentStatus: true },
+  });
+  if (!current) return { kind: "not_found" };
 
   return {
     kind: "status",
-    orderId: order.id,
-    status: mapPaymentStatus(order.paymentStatus),
+    orderId: attempt.orderId,
+    status: mapPaymentStatus(current.paymentStatus),
   };
 }
 
 /**
- * The single path that marks an order PAID, shared by the webhook and the
- * verify endpoint. Stock, inventory logs, and fulfillment are never touched
- * here: the stock was reserved when the order was created.
+ * The single entry point for a trusted provider success (signed webhook or a
+ * successful verify call). Runs entirely in one transaction so the attempt
+ * state, the order's PENDING -> PAID transition, the sales ledger row and any
+ * reconciliation record either all commit or all roll back.
  */
-export async function markOrderPaid(
-  reference: string,
-  amountPesewas: unknown,
+export async function settleAttempt(
+  input: SettleAttemptInput,
+): Promise<SettleOutcome> {
+  return withTransactionRetry(() =>
+    prisma.$transaction(async (tx) => {
+      const attempt = await tx.paymentAttempt.findUnique({
+        where: { reference: input.reference },
+        select: {
+          id: true,
+          orderId: true,
+          reference: true,
+          status: true,
+          currency: true,
+          amountPesewas: true,
+          providerTransactionId: true,
+        },
+      });
+
+      const providerAmountPesewas = toPesewaBigInt(
+        toDecimal(input.providerAmount),
+      );
+      const providerCurrency = input.providerCurrency || null;
+
+      if (!attempt) {
+        await recordReconciliation(tx, {
+          reference: input.reference,
+          reason: ReconciliationReason.UNKNOWN_REFERENCE,
+          amountPesewas: providerAmountPesewas,
+          providerCurrency,
+          providerTransactionId: input.providerTransactionId,
+        });
+        console.warn(
+          `PAYMENT_UNKNOWN_REFERENCE source=${input.source} recorded for reconciliation`,
+        );
+        return "unknown_reference";
+      }
+
+      // A terminal attempt is never re-classified: a repeated or malformed
+      // notification for an already-settled charge must not create a spurious
+      // mismatch record against a paid order.
+      if (!canRecordSuccess(attempt.status)) {
+        return attempt.status === PaymentAttemptStatus.MISMATCH
+          ? "mismatch_notification"
+          : "duplicate_notification";
+      }
+
+      const match = matchProviderAgainstAttempt(
+        attempt,
+        input.providerAmount,
+        input.providerCurrency,
+      );
+
+      if (!match.ok) {
+        // Record provider evidence once; never overwrite it on later notices.
+        await tx.paymentAttempt.updateMany({
+          where: { id: attempt.id, providerAmountPesewas: null },
+          data: {
+            providerAmountPesewas,
+            providerCurrency,
+            providerTransactionId: input.providerTransactionId,
+          },
+        });
+        await tx.paymentAttempt.updateMany({
+          where: {
+            id: attempt.id,
+            status: {
+              in: [
+                PaymentAttemptStatus.INITIALIZED,
+                PaymentAttemptStatus.FAILED,
+                PaymentAttemptStatus.ABANDONED,
+              ],
+            },
+          },
+          data: {
+            status: PaymentAttemptStatus.MISMATCH,
+            reconciliationReason: match.kind,
+          },
+        });
+        await recordReconciliation(tx, {
+          reference: attempt.reference,
+          reason: match.kind,
+          orderId: attempt.orderId,
+          attemptId: attempt.id,
+          amountPesewas: providerAmountPesewas,
+          providerCurrency,
+          providerTransactionId: input.providerTransactionId,
+        });
+        console.warn(
+          `PAYMENT_AMOUNT_MISMATCH attemptId=${attempt.id} kind=${match.kind}`,
+        );
+        return "mismatch";
+      }
+
+      // Conditional transition: only one settlement can flip the attempt, so a
+      // repeated notification for the same charge writes nothing.
+      const updated = await tx.paymentAttempt.updateMany({
+        where: {
+          id: attempt.id,
+          status: {
+            in: [
+              PaymentAttemptStatus.INITIALIZED,
+              PaymentAttemptStatus.FAILED,
+              PaymentAttemptStatus.ABANDONED,
+            ],
+          },
+        },
+        data: {
+          status: PaymentAttemptStatus.SUCCEEDED,
+          confirmedAt: input.paidAt,
+          providerAmountPesewas: match.amountPesewas,
+          providerCurrency: input.providerCurrency,
+          providerTransactionId:
+            input.providerTransactionId ?? attempt.providerTransactionId,
+        },
+      });
+
+      if (updated.count !== 1) {
+        return attempt.status === PaymentAttemptStatus.MISMATCH
+          ? "mismatch_notification"
+          : "duplicate_notification";
+      }
+
+      const order = await tx.order.findUnique({
+        where: { id: attempt.orderId },
+        select: { id: true, total: true, paymentStatus: true },
+      });
+
+      if (!order) {
+        await recordReconciliation(tx, {
+          reference: attempt.reference,
+          reason: ReconciliationReason.ORDER_MISSING,
+          orderId: attempt.orderId,
+          attemptId: attempt.id,
+          amountPesewas: match.amountPesewas,
+          providerCurrency,
+          providerTransactionId: input.providerTransactionId,
+        });
+        console.warn(`PAYMENT_ORDER_MISSING attemptId=${attempt.id}`);
+        return "order_missing";
+      }
+
+      const plan = planOrderSettlement(order.paymentStatus);
+
+      if (plan === "duplicate_charge") {
+        await recordReconciliation(tx, {
+          reference: attempt.reference,
+          reason: ReconciliationReason.DUPLICATE_CHARGE,
+          orderId: order.id,
+          attemptId: attempt.id,
+          amountPesewas: match.amountPesewas,
+          providerCurrency,
+          providerTransactionId: input.providerTransactionId,
+        });
+        console.warn(
+          `PAYMENT_DUPLICATE_CHARGE orderId=${order.id} attemptId=${attempt.id}`,
+        );
+        return "duplicate_charge";
+      }
+
+      if (plan === "after_expiry") {
+        await recordReconciliation(tx, {
+          reference: attempt.reference,
+          reason: ReconciliationReason.PAYMENT_AFTER_EXPIRY,
+          orderId: order.id,
+          attemptId: attempt.id,
+          amountPesewas: match.amountPesewas,
+          providerCurrency,
+          providerTransactionId: input.providerTransactionId,
+        });
+        console.warn(
+          `PAYMENT_AFTER_EXPIRY orderId=${order.id} attemptId=${attempt.id}`,
+        );
+        return "after_expiry";
+      }
+
+      const outcome = await markOrderPaid(
+        tx,
+        order.id,
+        new Prisma.Decimal(match.amountPesewas.toString()),
+        input.providerCurrency,
+        input.paidAt,
+      );
+
+      switch (outcome) {
+        case "paid":
+          return "paid";
+        case "already_paid":
+          await recordReconciliation(tx, {
+            reference: attempt.reference,
+            reason: ReconciliationReason.DUPLICATE_CHARGE,
+            orderId: order.id,
+            attemptId: attempt.id,
+            amountPesewas: match.amountPesewas,
+            providerCurrency,
+            providerTransactionId: input.providerTransactionId,
+          });
+          console.warn(
+            `PAYMENT_DUPLICATE_CHARGE orderId=${order.id} attemptId=${attempt.id}`,
+          );
+          return "duplicate_charge";
+        case "not_pending": {
+          const after = await tx.order.findUnique({
+            where: { id: order.id },
+            select: { paymentStatus: true },
+          });
+          const reason =
+            after?.paymentStatus === PaymentStatus.PAID
+              ? ReconciliationReason.DUPLICATE_CHARGE
+              : ReconciliationReason.PAYMENT_AFTER_EXPIRY;
+          await recordReconciliation(tx, {
+            reference: attempt.reference,
+            reason,
+            orderId: order.id,
+            attemptId: attempt.id,
+            amountPesewas: match.amountPesewas,
+            providerCurrency,
+            providerTransactionId: input.providerTransactionId,
+          });
+          console.warn(
+            `PAYMENT_${reason} orderId=${order.id} attemptId=${attempt.id}`,
+          );
+          return reason === ReconciliationReason.DUPLICATE_CHARGE
+            ? "duplicate_charge"
+            : "after_expiry";
+        }
+        case "expired":
+          await recordReconciliation(tx, {
+            reference: attempt.reference,
+            reason: ReconciliationReason.PAYMENT_AFTER_EXPIRY,
+            orderId: order.id,
+            attemptId: attempt.id,
+            amountPesewas: match.amountPesewas,
+            providerCurrency,
+            providerTransactionId: input.providerTransactionId,
+          });
+          console.warn(
+            `PAYMENT_AFTER_EXPIRY orderId=${order.id} attemptId=${attempt.id}`,
+          );
+          return "after_expiry";
+        case "amount_mismatch":
+          await recordReconciliation(tx, {
+            reference: attempt.reference,
+            reason: ReconciliationReason.AMOUNT_MISMATCH,
+            orderId: order.id,
+            attemptId: attempt.id,
+            amountPesewas: match.amountPesewas,
+            providerCurrency,
+            providerTransactionId: input.providerTransactionId,
+          });
+          return "mismatch";
+        case "not_found":
+          return "order_missing";
+        default:
+          return "mismatch";
+      }
+    }),
+  );
+}
+
+/**
+ * The single path that marks an order PAID and the single creator of its
+ * DailySale rows. Always called inside the settleAttempt transaction (no nested
+ * transaction). Stock, inventory logs and fulfillment are never touched here:
+ * stock was reserved when the order was created.
+ */
+async function markOrderPaid(
+  tx: Prisma.TransactionClient,
+  orderId: string,
+  providerPesewas: Prisma.Decimal,
   currency: string,
   paidAt: Date,
 ): Promise<MarkOrderPaidOutcome> {
-  const order = await prisma.order.findUnique({
-    where: { paystackRef: reference },
-    select: { id: true, total: true, paymentStatus: true },
+  const order = await tx.order.findUnique({
+    where: { id: orderId },
+    select: { total: true, paymentStatus: true },
   });
 
-  if (!order) {
-    console.warn(`PAYMENT_UNKNOWN_REFERENCE reference=${reference}`);
-    return "not_found";
-  }
+  if (!order) return "not_found";
+  if (order.paymentStatus === PaymentStatus.PAID) return "already_paid";
 
-  if (order.paymentStatus === PaymentStatus.PAID) {
-    return "already_paid";
-  }
-
-  const expectedPesewas = new Prisma.Decimal(order.total).times(100);
-  const receivedPesewas = toDecimal(amountPesewas);
-
-  if (
-    receivedPesewas === null ||
-    currency !== PAYSTACK_CURRENCY ||
-    !receivedPesewas.equals(expectedPesewas)
-  ) {
-    console.error(
-      `PAYMENT_AMOUNT_MISMATCH orderId=${order.id} expected=${expectedPesewas.toFixed(0)} received=${receivedPesewas === null ? "invalid" : receivedPesewas.toFixed(0)} currency=${currency}`,
-    );
+  const orderPesewas = new Prisma.Decimal(order.total).times(100);
+  if (currency !== PAYSTACK_CURRENCY || !providerPesewas.equals(orderPesewas)) {
     return "amount_mismatch";
   }
 
-  if (order.paymentStatus === PaymentStatus.FAILED) {
-    console.error(
-      `PAYMENT_ON_EXPIRED_ORDER orderId=${order.id} reference=${reference}`,
-    );
-    return "expired";
-  }
+  if (order.paymentStatus === PaymentStatus.FAILED) return "expired";
 
-  return prisma.$transaction(async (tx) => {
-    const updated = await tx.order.updateMany({
-      where: { id: order.id, paymentStatus: PaymentStatus.PENDING },
+  const updated = await tx.order.updateMany({
+    where: { id: orderId, paymentStatus: PaymentStatus.PENDING },
+    data: {
+      paymentStatus: PaymentStatus.PAID,
+      reservedUntil: null,
+    },
+  });
+
+  // The conditional update is the concurrency guard: whichever caller does not
+  // flip PENDING -> PAID writes nothing.
+  if (updated.count !== 1) return "not_pending";
+
+  const items = await tx.orderItem.findMany({
+    where: { orderId },
+    select: { productId: true, quantity: true, unitPrice: true },
+  });
+
+  for (const item of items) {
+    await tx.dailySale.create({
       data: {
-        paymentStatus: PaymentStatus.PAID,
-        paidAt,
-        reservedUntil: null,
+        orderId,
+        productId: item.productId,
+        saleDate: utcDayStart(paidAt),
+        quantity: item.quantity,
+        amount: item.unitPrice.times(item.quantity),
       },
     });
+  }
 
-    // The conditional update is the concurrency guard: whichever caller does
-    // not flip PENDING -> PAID writes nothing and returns.
-    if (updated.count !== 1) return "not_pending";
-
-    const items = await tx.orderItem.findMany({
-      where: { orderId: order.id },
-      select: { productId: true, quantity: true, unitPrice: true },
-    });
-
-    for (const item of items) {
-      await tx.dailySale.create({
-        data: {
-          orderId: order.id,
-          productId: item.productId,
-          saleDate: utcDayStart(paidAt),
-          quantity: item.quantity,
-          amount: item.unitPrice.times(item.quantity),
-        },
-      });
-    }
-
-    return "paid";
-  });
+  return "paid";
 }
