@@ -39,14 +39,17 @@ export async function listActiveProducts(): Promise<ProductResponse[]> {
       throw new Error(`Unknown product category: ${String(category)}`);
     }
 
+    const stock = product.colors.reduce((total, color) => total + color.stock, 0);
+
     return {
       id: product.id,
       name: product.name,
       category: CATEGORY_LABELS[category],
       price: Number(product.basePrice),
-      stock: product.colors.reduce((total, color) => total + color.stock, 0),
+      stock,
       colors: product.colors.map((color) => color.name),
       image: product.images[0] ?? null,
+      soldOut: stock === 0,
     };
   });
 }
