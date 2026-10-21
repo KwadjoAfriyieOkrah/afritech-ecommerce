@@ -29,6 +29,7 @@ export function CartSummary({ zones }: CartSummaryProps) {
   );
 
   const hasDeliveryArea = deliveryArea.trim().length > 0;
+  const hasSoldOutItems = items.some((item) => item.soldOut);
 
   if (items.length === 0) {
     return (
@@ -79,6 +80,12 @@ export function CartSummary({ zones }: CartSummaryProps) {
               <div className="min-w-0 flex-1">
                 <p className="truncate text-sm font-medium text-ink">{item.name}</p>
                 {item.color && <p className="text-xs text-stone-500">{item.color}</p>}
+
+                {item.soldOut && (
+                  <p className="mt-1 text-xs font-semibold text-red-700">
+                    Sold out - remove this item to continue
+                  </p>
+                )}
 
                 <div className="mt-1.5 flex items-center gap-2">
                   <div className="flex items-center rounded-lg border border-stone-300">
@@ -146,9 +153,20 @@ export function CartSummary({ zones }: CartSummaryProps) {
         </div>
       </dl>
 
-      <Link href="/checkout" className="btn btn-primary w-full">
-        Proceed to Checkout
-      </Link>
+      {hasSoldOutItems ? (
+        <div className="flex flex-col gap-2">
+          <button type="button" disabled className="btn btn-primary w-full">
+            Proceed to Checkout
+          </button>
+          <p role="alert" className="text-xs font-medium text-red-700">
+            Checkout is blocked while the cart holds a sold out item. Remove it to continue.
+          </p>
+        </div>
+      ) : (
+        <Link href="/checkout" className="btn btn-primary w-full">
+          Proceed to Checkout
+        </Link>
+      )}
     </aside>
   );
 }

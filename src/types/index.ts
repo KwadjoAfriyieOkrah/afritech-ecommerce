@@ -18,6 +18,12 @@ export interface Product {
   description?: string;
   createdAt?: string;
   updatedAt?: string;
+  /**
+   * Server flag: the product has no stock left in any of its colours. It is
+   * passed through from the API untouched, so the storefront never has to
+   * derive it from `stock`.
+   */
+  soldOut: boolean;
 }
 
 export interface OrderItem {

@@ -8,6 +8,11 @@ export interface CartItem {
   color?: string;
   quantity: number;
   image: string | null;
+  /**
+   * Mirrors the server flag for the product. Optional because carts persisted
+   * before this field existed do not carry it.
+   */
+  soldOut?: boolean;
 }
 
 export interface CartState {
@@ -18,6 +23,12 @@ export interface CartState {
   updateQuantity: (productId: string, quantity: number, color?: string) => void;
   clearCart: () => void;
   computeTotal: () => void;
+  /**
+   * Applies the server's sold out status to the cart. Items are never
+   * removed here: a sold out item stays visible and blocks checkout until the
+   * customer removes it.
+   */
+  syncSoldOutStatus: (products: Array<{ id: string; soldOut: boolean }>) => void;
 }
 
 export const CART_STORAGE_KEY = 'afritech-cart';
@@ -85,7 +96,24 @@ export const useCartStore = create<CartState>()(
 
       clearCart: () => set({ items: [], totalPrice: 0 }),
 
-      computeTotal: () => set((state) => ({ totalPrice: sumItems(state.items) }))
+      computeTotal: () => set((state) => ({ totalPrice: sumItems(state.items) })),
+
+      syncSoldOutStatus: (products) =>
+        set((state) => {
+          const status = new Map<string, boolean>();
+          for (const product of products) status.set(product.id, product.soldOut);
+
+          let changed = false;
+          const items = state.items.map((item) => {
+            const soldOut = status.get(item.productId);
+            if (soldOut === undefined || soldOut === item.soldOut) return item;
+
+            changed = true;
+            return { ...item, soldOut };
+          });
+
+          return changed ? { items } : state;
+        })
     }),
     {
       name: CART_STORAGE_KEY,

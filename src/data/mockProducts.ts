@@ -15,7 +15,8 @@ export const MOCK_PRODUCTS: Product[] = [
     stock: 18,
     category: 'Audio',
     image: '',
-    description: 'Bass-forward true wireless earbuds with a pocketable charging case.'
+    description: 'Bass-forward true wireless earbuds with a pocketable charging case.',
+    soldOut: false
   },
   {
     id: 'mock-2',
@@ -26,7 +27,8 @@ export const MOCK_PRODUCTS: Product[] = [
     stock: 32,
     category: 'Power',
     image: '',
-    description: 'Fast-charging power bank with an LED capacity display.'
+    description: 'Fast-charging power bank with an LED capacity display.',
+    soldOut: false
   },
   {
     id: 'mock-3',
@@ -37,7 +39,8 @@ export const MOCK_PRODUCTS: Product[] = [
     stock: 9,
     category: 'Wearables',
     image: '',
-    description: 'Fitness-focused smartwatch with call notifications and sleep tracking.'
+    description: 'Fitness-focused smartwatch with call notifications and sleep tracking.',
+    soldOut: false
   },
   {
     id: 'mock-4',
@@ -48,7 +51,8 @@ export const MOCK_PRODUCTS: Product[] = [
     stock: 4,
     category: 'Audio',
     image: '',
-    description: 'Portable speaker with passive bass radiators and stereo pairing.'
+    description: 'Portable speaker with passive bass radiators and stereo pairing.',
+    soldOut: false
   },
   {
     id: 'mock-5',
@@ -59,6 +63,7 @@ export const MOCK_PRODUCTS: Product[] = [
     stock: 0,
     category: 'Power',
     image: '',
-    description: 'Compact GaN charger that replaces a three-port brick.'
+    description: 'Compact GaN charger that replaces a three-port brick.',
+    soldOut: true
   }
 ];

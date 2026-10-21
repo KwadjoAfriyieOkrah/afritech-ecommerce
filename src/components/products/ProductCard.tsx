@@ -28,22 +28,29 @@ export function ProductCard({ product }: ProductCardProps) {
 
   const maxQuantity = Math.max(1, Math.min(MAX_QUANTITY, product.stock));
   const isOutOfStock = product.stock <= 0;
+  const soldOut = product.soldOut;
   const stock = stockLabel(product.stock);
+  const cannotBuy = isOutOfStock || soldOut;
 
   const openModal = () => {
+    if (cannotBuy) return;
+
     setColor(product.colors?.[0]);
     setQuantity(1);
     setIsModalOpen(true);
   };
 
   const handleSubmit = () => {
+    if (cannotBuy) return;
+
     addToCart({
       productId: product.id,
       name: product.name,
       price: product.price,
       color,
       quantity,
-      image: product.image
+      image: product.image,
+      soldOut
     });
     setIsModalOpen(false);
     setAdded(true);
@@ -65,6 +72,10 @@ export function ProductCard({ product }: ProductCardProps) {
             No image
           </div>
         )}
+
+        {soldOut && (
+          <span className="badge absolute left-2 top-2 bg-stone-900 text-white">Sold out</span>
+        )}
       </div>
 
       <div className="flex flex-1 flex-col gap-2 p-4">
@@ -80,10 +91,10 @@ export function ProductCard({ product }: ProductCardProps) {
           <button
             type="button"
             onClick={openModal}
-            disabled={isOutOfStock}
+            disabled={cannotBuy}
             className="btn btn-primary w-full"
           >
-            {isOutOfStock ? 'Unavailable' : 'Add to Cart'}
+            {soldOut ? 'Sold out' : isOutOfStock ? 'Unavailable' : 'Add to Cart'}
           </button>
           <p aria-live="polite" className="mt-2 text-center text-xs font-medium text-emerald-700">
             {added ? 'Added to cart' : ''}
