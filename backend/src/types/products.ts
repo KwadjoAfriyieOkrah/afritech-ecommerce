@@ -6,4 +6,5 @@ export type ProductResponse = {
   stock: number;
   colors: string[];
   image: string | null;
+  soldOut: boolean;
 };
