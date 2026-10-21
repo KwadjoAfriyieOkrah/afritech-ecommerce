@@ -4,7 +4,7 @@ import Link from 'next/link';
 import { useCallback, useEffect, useState } from 'react';
 import { HiOutlineTruck } from 'react-icons/hi';
 import { useCartStore, useUserStore } from '@/store';
-import { ApiError, getDeliveryZones, type DeliveryZone } from '@/services/api';
+import { ApiError, fetchProducts, getDeliveryZones, type DeliveryZone } from '@/services/api';
 import type { DeliveryInfo } from '@/types';
 import { AuthForm } from '@/components/auth/AuthForm';
 import { CartSummary } from '@/components/cart/CartSummary';
@@ -46,6 +46,7 @@ function CheckoutSkeleton() {
 
 export default function CheckoutPage() {
   const items = useCartStore((state) => state.items);
+  const syncSoldOutStatus = useCartStore((state) => state.syncSoldOutStatus);
   const deliveryInfo = useUserStore((state) => state.deliveryInfo);
   const updateDeliveryInfo = useUserStore((state) => state.updateDeliveryInfo);
   const user = useUserStore((state) => state.user);
@@ -68,6 +69,25 @@ export default function CheckoutPage() {
   useEffect(() => {
     void loadZones();
   }, [loadZones]);
+
+  // The cart is persisted, so a product can sell out after it was added. Ask
+  // the server which products are sold out and flag those cart items. Nothing
+  // is removed from the cart here.
+  useEffect(() => {
+    let cancelled = false;
+
+    fetchProducts()
+      .then((products) => {
+        if (!cancelled) syncSoldOutStatus(products);
+      })
+      .catch(() => {
+        // A failed lookup leaves the stored flags untouched.
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [syncSoldOutStatus]);
 
   // Pre-fill the checkout draft from the signed-in account without overwriting
   // anything the visitor already typed.
@@ -153,6 +173,7 @@ export default function CheckoutPage() {
 
   const currentIndex = STEPS.findIndex((entry) => entry.value === currentStep);
   const isProcessing = currentStep === 'processing';
+  const hasSoldOutItems = items.some((item) => item.soldOut);
 
   return (
     <div className="mx-auto w-full max-w-7xl px-4 py-8 sm:px-6">
@@ -178,51 +199,61 @@ export default function CheckoutPage() {
 
       <div className="grid gap-6 lg:grid-cols-[minmax(0,1fr)_22rem]">
         <div>
-          <ErrorBoundary title="Checkout failed to load">
-            {currentStep === 'delivery' && (
-              <DeliveryForm zones={zones} onComplete={() => setCurrentStep('payment')} />
-            )}
+          {hasSoldOutItems ? (
+            <div role="alert" className="alert-error flex flex-col items-start gap-2">
+              <p className="font-semibold text-ink">Your cart holds a sold out item</p>
+              <p className="text-sm">
+                Checkout is blocked until it is removed. The item stays in your cart so nothing
+                is taken away from you without you knowing.
+              </p>
+            </div>
+          ) : (
+            <ErrorBoundary title="Checkout failed to load">
+              {currentStep === 'delivery' && (
+                <DeliveryForm zones={zones} onComplete={() => setCurrentStep('payment')} />
+              )}
 
-            {(currentStep === 'payment' || isProcessing) && (
-              <>
-                {isProcessing && (
-                  <div
-                    className="card mb-4 flex flex-col items-start gap-2 p-4"
-                    aria-live="polite"
-                    role="status"
-                  >
-                    <p className="flex items-center gap-2 text-sm font-medium text-ink">
-                      <HiOutlineTruck className="h-4 w-4 text-dark-gold" aria-hidden="true" />
-                      Processing your order
-                    </p>
-                    <p className="text-xs text-stone-500">
-                      Hold on while we confirm your payment. This usually takes a few seconds.
-                    </p>
-                    <div className="skeleton h-1.5 w-full" />
-                  </div>
-                )}
+              {(currentStep === 'payment' || isProcessing) && (
+                <>
+                  {isProcessing && (
+                    <div
+                      className="card mb-4 flex flex-col items-start gap-2 p-4"
+                      aria-live="polite"
+                      role="status"
+                    >
+                      <p className="flex items-center gap-2 text-sm font-medium text-ink">
+                        <HiOutlineTruck className="h-4 w-4 text-dark-gold" aria-hidden="true" />
+                        Processing your order
+                      </p>
+                      <p className="text-xs text-stone-500">
+                        Hold on while we confirm your payment. This usually takes a few seconds.
+                      </p>
+                      <div className="skeleton h-1.5 w-full" />
+                    </div>
+                  )}
 
-                {!isProcessing && (
-                  <button
-                    type="button"
-                    onClick={() => setCurrentStep('delivery')}
-                    disabled={isProcessing}
-                    className="btn btn-ghost mb-4 text-sm"
-                  >
-                    Back to delivery details
-                  </button>
-                )}
+                  {!isProcessing && (
+                    <button
+                      type="button"
+                      onClick={() => setCurrentStep('delivery')}
+                      disabled={isProcessing}
+                      className="btn btn-ghost mb-4 text-sm"
+                    >
+                      Back to delivery details
+                    </button>
+                  )}
 
-                <PaymentForm
-                  zones={zones}
-                  deliveryInfo={deliveryInfo}
-                  onProcessingChange={(processing) =>
-                    setCurrentStep(processing ? 'processing' : 'payment')
-                  }
-                />
-              </>
-            )}
-          </ErrorBoundary>
+                  <PaymentForm
+                    zones={zones}
+                    deliveryInfo={deliveryInfo}
+                    onProcessingChange={(processing) =>
+                      setCurrentStep(processing ? 'processing' : 'payment')
+                    }
+                  />
+                </>
+              )}
+            </ErrorBoundary>
+          )}
         </div>
 
         <div className="lg:sticky lg:top-24 lg:self-start">
