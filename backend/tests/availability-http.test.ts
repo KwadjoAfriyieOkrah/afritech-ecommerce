@@ -64,6 +64,10 @@ const RESULT_KEYS = [
   "status",
 ];
 
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null;
+}
+
 function field(value: unknown, key: string): unknown {
   if (typeof value !== "object" || value === null) return undefined;
   return Reflect.get(value, key);
@@ -240,6 +244,9 @@ test("unknown colour and unknown product return the same status and shape", asyn
 
   assert.equal(stringField(colourLine, "status"), "unavailable");
   assert.equal(stringField(productLine, "status"), "unavailable");
+  if (!isRecord(colourLine) || !isRecord(productLine)) {
+    throw new Error("Expected availability result lines to be objects");
+  }
   assert.deepEqual(
     Object.keys(colourLine).sort(),
     Object.keys(productLine).sort(),
@@ -262,6 +269,9 @@ test("every result line has exactly the documented keys", async () => {
   assert.equal(lines.length, 4);
 
   for (const line of lines) {
+    if (!isRecord(line)) {
+      throw new Error("Expected an availability result line to be an object");
+    }
     assert.deepEqual(Object.keys(line).sort(), [...RESULT_KEYS].sort());
   }
 });
