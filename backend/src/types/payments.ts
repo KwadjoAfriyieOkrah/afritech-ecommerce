@@ -2,7 +2,8 @@ export interface InitializePaymentResponse {
   reference: string;
   amount: number;
   currency: string;
-  email: string;
+  /** The customer's own address, or null when they did not leave one. */
+  email: string | null;
 }
 
 export type PaymentStatusResponse = "paid" | "pending" | "failed";

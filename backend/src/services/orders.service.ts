@@ -6,11 +6,13 @@ import {
 } from "@prisma/client";
 
 import { prisma } from "../lib/prisma";
+import { newGuestAccessToken } from "../lib/guestAccessToken";
 import type {
   OrderItemResponse,
   OrderResponse,
   OrderStatusResponse,
   RiderResponse,
+  TrackOrderResponse,
 } from "../types/orders";
 
 const STANDARD_DELIVERY_DAYS = 3;
@@ -47,7 +49,41 @@ const orderSelect = Prisma.validator<Prisma.OrderSelect>()({
 });
 
 type OrderRow = Prisma.OrderGetPayload<{ select: typeof orderSelect }>;
-type OrderItemRow = OrderRow["items"][number];
+
+// Public tracking selects only what the tracking response needs. It never
+// loads the access token hash, the customer's email or the delivery address.
+const trackSelect = Prisma.validator<Prisma.OrderSelect>()({
+  reference: true,
+  customerPhone: true,
+  region: true,
+  deliveryFee: true,
+  total: true,
+  paymentStatus: true,
+  fulfillment: true,
+  createdAt: true,
+  rider: { select: { name: true, phone: true } },
+  items: {
+    select: {
+      id: true,
+      productId: true,
+      quantity: true,
+      unitPrice: true,
+      product: { select: { name: true, images: true } },
+      color: { select: { name: true } },
+    },
+  },
+});
+
+// The tracking query selects the same item columns, so the mapper works on the
+// shared shape instead of one specific payload type.
+interface OrderItemLike {
+  id: string;
+  productId: string;
+  quantity: number;
+  unitPrice: Prisma.Decimal;
+  product: { name: string; images: string[] };
+  color: { name: string };
+}
 
 export interface CreateOrderItemInput {
   productId: string;
@@ -57,18 +93,25 @@ export interface CreateOrderItemInput {
 
 export interface CreateOrderInput {
   customerName: string;
-  customerEmail: string;
+  customerEmail: string | null;
   customerPhone: string;
   deliveryArea: string;
   deliveryAddress: string;
   items: CreateOrderItemInput[];
   idempotencyKey: string;
-  userId: string;
+  /** null for a guest order, which is not tied to an account. */
+  userId: string | null;
 }
 
 export interface CreateOrderResult {
   status: 200 | 201;
   order: OrderResponse;
+  /**
+   * The raw order access token, returned exactly once when the order is
+   * created. A replayed idempotency key returns null here, because the first
+   * response already carried the token.
+   */
+  accessToken: string | null;
 }
 
 export interface InvalidItemDetail {
@@ -156,7 +199,7 @@ function formatExpectedDeliveryDate(
     .slice(0, 10);
 }
 
-function mapItem(item: OrderItemRow): OrderItemResponse {
+function mapItem(item: OrderItemLike): OrderItemResponse {
   return {
     id: item.id,
     productId: item.productId,
@@ -289,6 +332,9 @@ interface ResolvedLine {
 export async function createOrder(
   input: CreateOrderInput,
 ): Promise<CreateOrderResult> {
+  // A guest order has no user, so the lookup matches the idempotency key
+  // against orders with a null user. The unique index on the key keeps one
+  // order per key.
   const existing = await prisma.order.findFirst({
     where: { idempotencyKey: input.idempotencyKey, userId: input.userId },
     select: orderSelect,
@@ -297,8 +343,18 @@ export async function createOrder(
     const expectedDaysByRegion = await loadExpectedDeliveryDays([
       existing.region,
     ]);
-    return { status: 200, order: mapOrder(existing, expectedDaysByRegion) };
+    // The raw access token was only ever returned by the first response, so a
+    // replay cannot hand it out again.
+    return {
+      status: 200,
+      order: mapOrder(existing, expectedDaysByRegion),
+      accessToken: null,
+    };
   }
+
+  // The raw token is handed to the caller once. Only its hash is stored, so a
+  // leaked row cannot be turned back into a usable credential.
+  const access = newGuestAccessToken();
 
   try {
     const result = await prisma.$transaction(async (tx) => {
@@ -404,6 +460,7 @@ export async function createOrder(
           customerName: input.customerName,
           customerEmail: input.customerEmail,
           customerPhone: input.customerPhone,
+          accessTokenHash: access.hash,
           region: zone.name,
           address: input.deliveryAddress,
           deliveryFee: zone.fee,
@@ -444,7 +501,11 @@ export async function createOrder(
     const expectedDaysByRegion = new Map([
       [result.order.region, result.expectedDays],
     ]);
-    return { status: 201, order: mapOrder(result.order, expectedDaysByRegion) };
+    return {
+      status: 201,
+      order: mapOrder(result.order, expectedDaysByRegion),
+      accessToken: access.token,
+    };
   } catch (error) {
     if (isUniqueViolation(error, "idempotencyKey")) {
       const winner = await prisma.order.findFirst({
@@ -455,7 +516,11 @@ export async function createOrder(
         const expectedDaysByRegion = await loadExpectedDeliveryDays([
           winner.region,
         ]);
-        return { status: 200, order: mapOrder(winner, expectedDaysByRegion) };
+        return {
+          status: 200,
+          order: mapOrder(winner, expectedDaysByRegion),
+          accessToken: null,
+        };
       }
 
       // The key exists but is owned by a different user (or a legacy
@@ -466,4 +531,66 @@ export async function createOrder(
     }
     throw error;
   }
+}
+
+const PHONE_COUNTRY_CODE = "233";
+
+// Reduces the ways a customer may type a Ghanaian number to one comparable
+// form: 0244123456, +233244123456, 233244123456 and spaced or dashed
+// variants all become 233244123456.
+export function normalizePhone(value: string): string {
+  let digits = value.replace(/[^0-9+]/g, "");
+  if (digits.startsWith("+")) digits = digits.slice(1);
+  if (digits.startsWith(PHONE_COUNTRY_CODE)) return digits;
+  if (digits.startsWith("0")) {
+    return `${PHONE_COUNTRY_CODE}${digits.slice(1)}`;
+  }
+  return digits;
+}
+
+/**
+ * Public order tracking. The reference alone is not a secret, so the phone
+ * number is the second factor. An unknown reference, a wrong phone and a
+ * malformed request all resolve to the same not-found result, so the endpoint
+ * never confirms that an order exists.
+ */
+export async function trackOrder(
+  reference: string,
+  phone: string,
+): Promise<TrackOrderResponse | null> {
+  const order = await prisma.order.findFirst({
+    where: { reference: reference.trim().toUpperCase() },
+    select: trackSelect,
+  });
+
+  if (!order) return null;
+  if (normalizePhone(order.customerPhone) !== normalizePhone(phone)) {
+    return null;
+  }
+
+  const expectedDaysByRegion = await loadExpectedDeliveryDays([order.region]);
+  const expectedDays =
+    expectedDaysByRegion.get(order.region) ?? STANDARD_DELIVERY_DAYS;
+
+  const tracked: TrackOrderResponse = {
+    reference: order.reference,
+    status: mapPaymentToStatus(order.paymentStatus, order.fulfillment),
+    items: order.items.map(mapItem),
+    total: Number(order.total),
+    deliveryFee: Number(order.deliveryFee),
+    expectedDeliveryDate: formatExpectedDeliveryDate(
+      order.createdAt,
+      expectedDays,
+    ),
+  };
+
+  // The rider is only shared once the order is on the road.
+  const riderVisible =
+    order.fulfillment === FulfillmentStatus.DISPATCHED ||
+    order.fulfillment === FulfillmentStatus.DELIVERED;
+  if (riderVisible && order.rider) {
+    tracked.rider = { name: order.rider.name, phone: order.rider.phone };
+  }
+
+  return tracked;
 }

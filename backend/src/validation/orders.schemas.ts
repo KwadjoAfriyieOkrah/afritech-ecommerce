@@ -32,11 +32,19 @@ export const createOrderSchema = z
       .trim()
       .min(2, "Name must be at least 2 characters")
       .max(100, "Name must be at most 100 characters"),
+    // A guest may order without an email. A blank value is accepted and stored
+    // as null; anything that is present still has to be a valid address.
     customerEmail: z
       .string()
       .trim()
       .toLowerCase()
-      .email("Enter a valid email address"),
+      .default("")
+      .refine(
+        (value) =>
+          value.length === 0 ||
+          z.string().email().safeParse(value).success,
+        { message: "Enter a valid email address" },
+      ),
     customerPhone: z
       .string()
       .trim()

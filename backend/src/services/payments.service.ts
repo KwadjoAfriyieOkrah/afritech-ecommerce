@@ -6,6 +6,10 @@ import {
 } from "@prisma/client";
 
 import { env } from "../lib/env";
+import {
+  hashGuestAccessToken,
+  matchesAccessTokenHash,
+} from "../lib/guestAccessToken";
 import { prisma } from "../lib/prisma";
 import type { PaymentStatusResponse } from "../types/payments";
 import {
@@ -27,13 +31,33 @@ import {
 } from "./payment-settlement";
 
 const PAYSTACK_API_BASE = "https://api.paystack.co";
+const SYSTEM_EMAIL_DOMAIN = "noreply.afritech.local";
+
+/**
+ * The caller of a payment endpoint. A signed-in customer is identified by
+ * their user id, a guest by the access token they received when the order was
+ * created.
+ */
+export interface OrderAccess {
+  userId: string | null;
+  accessToken: string | null;
+}
 
 export type InitializePaymentOutcome =
   | {
       kind: "ok";
       reference: string;
       amount: number;
-      email: string;
+      /**
+       * The address the provider request is built with. It is never stored on
+       * the order and never sent to the client.
+       */
+      providerEmail: string;
+      /**
+       * The address the customer gave us. Null for a guest who did not leave
+       * one, in which case the system address is used for the provider.
+       */
+      customerEmail: string | null;
       currency: string;
     }
   | { kind: "not_found" }
@@ -145,6 +169,50 @@ class OrderUnavailableError extends Error {
 }
 
 /**
+ * The candidates a caller may reach: their own orders, and the orders whose
+ * access token hash matches the one they presented. The hash is derived in
+ * code, so the query narrows the rows the database has to consider while the
+ * authoritative comparison stays in code.
+ */
+function buildOwnershipFilters(
+  access: OrderAccess,
+): Prisma.OrderWhereInput[] {
+  const filters: Prisma.OrderWhereInput[] = [];
+  if (access.userId !== null) filters.push({ userId: access.userId });
+  if (access.accessToken !== null) {
+    filters.push({ accessTokenHash: hashGuestAccessToken(access.accessToken) });
+  }
+  return filters;
+}
+
+/**
+ * The authoritative ownership check. The order owner is matched by id, a
+ * guest by a constant-time comparison of the presented token with the stored
+ * hash. A false result is never distinguished from an unknown order.
+ */
+function isAuthorizedForOrder(
+  order: { userId: string | null; accessTokenHash: string | null },
+  access: OrderAccess,
+): boolean {
+  if (
+    access.userId !== null &&
+    order.userId !== null &&
+    order.userId === access.userId
+  ) {
+    return true;
+  }
+  if (access.accessToken === null) return false;
+  return matchesAccessTokenHash(access.accessToken, order.accessTokenHash);
+}
+
+// The address a provider request is built with when the customer left no
+// email. It is a placeholder for the provider only: it is never stored on the
+// order and never sent to the client.
+function systemOrderEmail(reference: string): string {
+  return `order-${reference.toLowerCase()}@${SYSTEM_EMAIL_DOMAIN}`;
+}
+
+/**
  * Authorizes a new payment attempt for an order the caller owns and mints a
  * fresh, backend-generated Paystack reference for it. Each call inserts its own
  * immutable PaymentAttempt row, so concurrent calls cannot invalidate each
@@ -155,10 +223,17 @@ class OrderUnavailableError extends Error {
  */
 export async function initializePayment(
   orderId: string,
-  userId: string,
+  userId: string | null,
+  accessToken: string | null = null,
 ): Promise<InitializePaymentOutcome> {
+  const access: OrderAccess = { userId, accessToken };
+  const ownershipFilters = buildOwnershipFilters(access);
+
   const order = await prisma.order.findFirst({
-    where: { id: orderId, userId },
+    where: {
+      id: orderId,
+      ...(ownershipFilters.length > 0 ? { OR: ownershipFilters } : {}),
+    },
     select: {
       id: true,
       reference: true,
@@ -166,11 +241,16 @@ export async function initializePayment(
       total: true,
       paymentStatus: true,
       reservedUntil: true,
+      userId: true,
+      accessTokenHash: true,
     },
   });
 
   // Unknown, another user's, and unreachable orders are indistinguishable.
   if (!order) return { kind: "not_found" };
+  // The token is compared against the stored hash in constant time, so a
+  // guessing attacker learns nothing from how long the answer took.
+  if (!isAuthorizedForOrder(order, access)) return { kind: "not_found" };
   if (order.paymentStatus === PaymentStatus.PAID) {
     return { kind: "already_paid" };
   }
@@ -224,7 +304,9 @@ export async function initializePayment(
         kind: "ok",
         reference,
         amount: Number(amountPesewas),
-        email: order.customerEmail,
+        providerEmail:
+          order.customerEmail ?? systemOrderEmail(order.reference),
+        customerEmail: order.customerEmail,
         currency: PAYSTACK_CURRENCY,
       };
     } catch (error) {
@@ -322,21 +404,38 @@ function readTransactionId(value: unknown): string | null {
 
 export async function verifyPayment(
   reference: string,
-  userId: string,
+  userId: string | null,
+  accessToken: string | null = null,
 ): Promise<VerifyPaymentOutcome> {
+  const access: OrderAccess = { userId, accessToken };
+  const ownershipFilters = buildOwnershipFilters(access);
+
   // Ownership is part of the query: a reference owned by another user is
   // indistinguishable from one that does not exist. The attempt row persists,
   // so a superseded/abandoned reference still resolves.
   const attempt = await prisma.paymentAttempt.findFirst({
-    where: { reference, order: { userId } },
+    where: {
+      reference,
+      order: ownershipFilters.length > 0 ? { OR: ownershipFilters } : {},
+    },
     select: {
       id: true,
       orderId: true,
       status: true,
-      order: { select: { paymentStatus: true } },
+      order: {
+        select: {
+          paymentStatus: true,
+          userId: true,
+          accessTokenHash: true,
+        },
+      },
     },
   });
   if (!attempt) return { kind: "not_found" };
+  // The token is compared against the stored hash in constant time.
+  if (!isAuthorizedForOrder(attempt.order, access)) {
+    return { kind: "not_found" };
+  }
 
   // Only ask Paystack when a provider result could still change: a terminal
   // attempt (SUCCEEDED/MISMATCH) or an already-paid order is returned as-is.

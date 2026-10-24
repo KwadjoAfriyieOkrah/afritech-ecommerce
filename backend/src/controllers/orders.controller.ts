@@ -9,6 +9,7 @@ import {
   InsufficientStockError,
   InvalidItemError,
   listOrdersForUser,
+  trackOrder,
   UnknownDeliveryZoneError,
 } from "../services/orders.service";
 import {
@@ -44,6 +45,12 @@ function readIdempotencyKey(req: Request): string | null {
     return null;
   }
   return value;
+}
+
+function readQueryString(value: unknown): string | null {
+  if (typeof value !== "string") return null;
+  const trimmed = value.trim();
+  return trimmed.length > 0 ? trimmed : null;
 }
 
 function sendValidationError(error: ZodError, res: Response): void {
@@ -115,18 +122,17 @@ export async function submitOrder(req: Request, res: Response): Promise<void> {
     return;
   }
 
-  // requireAuth guarantees a user, but the guard keeps ownership explicit and
-  // narrows the type without a cast.
+  // A guest may check out without an account, so a missing user is normal
+  // here. A present but invalid bearer token was already rejected by
+  // optionalAuth.
   const user = req.authUser;
-  if (!user) {
-    res.status(401).json({ error: UNAUTHORIZED_MESSAGE });
-    return;
-  }
+  const customerEmail =
+    parsed.data.customerEmail.length > 0 ? parsed.data.customerEmail : null;
 
   try {
     const result = await createOrder({
       customerName: parsed.data.customerName,
-      customerEmail: parsed.data.customerEmail,
+      customerEmail,
       customerPhone: parsed.data.customerPhone,
       deliveryArea: parsed.data.deliveryArea,
       deliveryAddress: parsed.data.deliveryAddress,
@@ -136,10 +142,15 @@ export async function submitOrder(req: Request, res: Response): Promise<void> {
         quantity: item.quantity,
       })),
       idempotencyKey,
-      userId: user.id,
+      userId: user ? user.id : null,
     });
 
-    res.status(result.status).json(result.order);
+    // The access token is returned once, on creation. It is the only way for a
+    // guest to reach the order afterwards.
+    res.status(result.status).json({
+      ...result.order,
+      accessToken: result.accessToken,
+    });
   } catch (error) {
     if (error instanceof InvalidItemError) {
       res.status(400).json({ error: "Invalid item", details: error.details });
@@ -176,5 +187,36 @@ export async function submitOrder(req: Request, res: Response): Promise<void> {
 
     console.error("Failed to create order:", error);
     res.status(500).json({ error: "Could not create order" });
+  }
+}
+
+// Public tracking. The reference plus the phone number on the order are the
+// two factors. This endpoint is rate limited in production, because it is open
+// to guests.
+export async function trackOrderHandler(
+  req: Request,
+  res: Response,
+): Promise<void> {
+  const reference = readQueryString(req.query.reference);
+  const phone = readQueryString(req.query.phone);
+
+  // A missing field is answered exactly like an unknown order, so the
+  // endpoint never confirms that a reference exists.
+  if (!reference || !phone) {
+    res.status(404).json(ORDER_NOT_FOUND_BODY);
+    return;
+  }
+
+  try {
+    const tracked = await trackOrder(reference, phone);
+    if (!tracked) {
+      res.status(404).json(ORDER_NOT_FOUND_BODY);
+      return;
+    }
+
+    res.status(200).json(tracked);
+  } catch (error) {
+    console.error("Failed to track order:", error);
+    res.status(500).json({ error: "Could not track order" });
   }
 }

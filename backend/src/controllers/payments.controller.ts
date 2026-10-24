@@ -8,7 +8,6 @@ import {
   initializePaymentSchema,
   toPaymentValidationDetails,
 } from "../validation/payments.schemas";
-import { UNAUTHORIZED_MESSAGE } from "../middleware/requireAuth";
 import type {
   InitializePaymentResponse,
   VerifyPaymentResponse,
@@ -16,6 +15,7 @@ import type {
 
 const MAX_ORDER_ID_LENGTH = 64;
 const MAX_REFERENCE_LENGTH = 128;
+const MAX_ACCESS_TOKEN_LENGTH = 256;
 
 // Same not-found body as the order endpoints: unknown id, a non-pending or
 // expired order, and a malformed id are indistinguishable from outside.
@@ -23,6 +23,20 @@ const ORDER_NOT_FOUND_BODY: { error: string } = { error: "Order not found" };
 const PROVIDER_UNAVAILABLE_BODY: { error: string } = {
   error: "Payment provider unavailable",
 };
+
+// A guest authorises itself with the order access token it received when the
+// order was created. The header is only read here; the comparison against the
+// stored hash happens in the service, in constant time.
+function readAccessToken(req: Request): string | null {
+  const raw: unknown = req.headers["x-order-access-token"];
+  const value = Array.isArray(raw) ? raw[0] : raw;
+  if (typeof value !== "string") return null;
+  const trimmed = value.trim();
+  if (trimmed.length === 0 || trimmed.length > MAX_ACCESS_TOKEN_LENGTH) {
+    return null;
+  }
+  return trimmed;
+}
 
 export async function initializePaymentHandler(
   req: Request,
@@ -37,13 +51,10 @@ export async function initializePaymentHandler(
     return;
   }
 
-  // requireAuth guarantees a user; this narrows the type without a cast and
-  // keeps the ownership requirement explicit.
+  // A signed-in customer or a guest with the order access token may pay. A
+  // caller with neither is answered like an unknown order.
   const user = req.authUser;
-  if (!user) {
-    res.status(401).json({ error: UNAUTHORIZED_MESSAGE });
-    return;
-  }
+  const accessToken = readAccessToken(req);
 
   if (parsed.data.orderId.length > MAX_ORDER_ID_LENGTH) {
     res.status(404).json(ORDER_NOT_FOUND_BODY);
@@ -51,7 +62,11 @@ export async function initializePaymentHandler(
   }
 
   try {
-    const result = await initializePayment(parsed.data.orderId, user.id);
+    const result = await initializePayment(
+      parsed.data.orderId,
+      user ? user.id : null,
+      accessToken,
+    );
 
     if (result.kind === "not_found") {
       res.status(404).json(ORDER_NOT_FOUND_BODY);
@@ -74,7 +89,7 @@ export async function initializePaymentHandler(
       reference: result.reference,
       amount: result.amount,
       currency: result.currency,
-      email: result.email,
+      email: result.customerEmail,
     };
     res.status(200).json(body);
   } catch (error) {
@@ -101,13 +116,14 @@ export async function verifyPaymentHandler(
   }
 
   const user = req.authUser;
-  if (!user) {
-    res.status(401).json({ error: UNAUTHORIZED_MESSAGE });
-    return;
-  }
+  const accessToken = readAccessToken(req);
 
   try {
-    const result = await verifyPayment(reference, user.id);
+    const result = await verifyPayment(
+      reference,
+      user ? user.id : null,
+      accessToken,
+    );
 
     if (result.kind === "not_found") {
       res.status(404).json(ORDER_NOT_FOUND_BODY);

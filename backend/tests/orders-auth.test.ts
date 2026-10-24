@@ -194,7 +194,10 @@ async function seedCatalogue(suffix: string): Promise<SeedCatalogue> {
 }
 
 // ---------------------------------------------------------------------------
-test("POST /orders without a token returns 401 and creates no order or stock change", async () => {
+// A guest may check out without an account, so a missing token is no longer
+// an error. A token that is present but invalid still has to be rejected, so
+// a caller cannot silently fall back to guest checkout.
+test("POST /orders with an invalid token returns 401 and creates no order or stock change", async () => {
   const suffix = nextSuffix();
   const cleanup: CleanupIds = {};
   try {
@@ -216,6 +219,7 @@ test("POST /orders without a token returns 401 and creates no order or stock cha
       headers: {
         "Content-Type": "application/json",
         "Idempotency-Key": idempotencyKey,
+        Authorization: "Bearer not-a-valid-token",
       },
       body: JSON.stringify(buildOrderBody(catalogue, suffix)),
     });
