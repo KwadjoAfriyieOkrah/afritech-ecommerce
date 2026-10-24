@@ -123,7 +123,8 @@ model Order {
   reference       String            @unique // productId + date + time, used for admin filtering and rider assignment
   userId          String?           // null for guest checkout
   customerName    String
-  customerEmail   String
+  customerEmail   String?
+  accessTokenHash String?
   customerPhone   String
   region          String            // Greater Accra, other regions, etc.
   address         String
