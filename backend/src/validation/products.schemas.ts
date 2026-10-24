@@ -208,10 +208,35 @@ export const restockInputSchema = z.object({
     .positive("quantity must be greater than 0"),
 });
 
+const availabilityLineSchema = z
+  .object({
+    productId: productIdSchema,
+    color: z.string().trim().min(1, "Colour is required"),
+    quantity: z
+      .number()
+      .int("Quantity must be a whole number")
+      .min(1, "Quantity must be at least 1")
+      .max(10, "Quantity must be at most 10"),
+  })
+  .strict();
+
+// Read-only price and stock probe used before checkout. It never writes or
+// reserves anything; POST /orders remains the authority.
+export const productAvailabilitySchema = z
+  .object({
+    items: z
+      .array(availabilityLineSchema)
+      .min(1, "Add at least one item")
+      .max(50, "You can check at most 50 items"),
+  })
+  .strict();
+
 export type ProductInput = z.infer<typeof productInputSchema>;
 export type BulkProductRow = z.infer<typeof bulkProductRowSchema>;
 export type ProductPatch = z.infer<typeof productPatchSchema>;
 export type RestockInput = z.infer<typeof restockInputSchema>;
+export type ProductAvailabilityInput = z.infer<typeof productAvailabilitySchema>;
+export type AvailabilityLineInput = z.infer<typeof availabilityLineSchema>;
 
 export interface ValidationDetail {
   field: string;
