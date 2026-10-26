@@ -6,7 +6,10 @@ import {
 } from "@prisma/client";
 
 import { prisma } from "../lib/prisma";
-import { newGuestAccessToken } from "../lib/guestAccessToken";
+import {
+  matchesAccessTokenHash,
+  newGuestAccessToken,
+} from "../lib/guestAccessToken";
 import type {
   OrderItemResponse,
   OrderResponse,
@@ -18,6 +21,17 @@ import type {
 const STANDARD_DELIVERY_DAYS = 3;
 const RESERVATION_WINDOW_MS = 15 * 60 * 1000;
 const MS_PER_DAY = 24 * 60 * 60 * 1000;
+export const DELIVERY_TRACKING_GRACE_MS = 2 * 24 * 60 * 60 * 1000;
+
+function trackingWindowClosed(
+  order: { deliveredAt: Date | null },
+  now: Date,
+): boolean {
+  if (!order.deliveredAt) return false;
+  return (
+    now.getTime() > order.deliveredAt.getTime() + DELIVERY_TRACKING_GRACE_MS
+  );
+}
 
 const orderSelect = Prisma.validator<Prisma.OrderSelect>()({
   id: true,
@@ -61,6 +75,7 @@ const trackSelect = Prisma.validator<Prisma.OrderSelect>()({
   paymentStatus: true,
   fulfillment: true,
   createdAt: true,
+  deliveredAt: true,
   rider: { select: { name: true, phone: true } },
   items: {
     select: {
@@ -321,6 +336,36 @@ export async function getOrderForUser(
   return mapOrder(order, expectedDaysByRegion);
 }
 
+const guestOrderSelect = Prisma.validator<Prisma.OrderSelect>()({
+  ...orderSelect,
+  accessTokenHash: true,
+  deliveredAt: true,
+});
+
+/**
+ * A guest order is identified by its id plus the one-time access token. The
+ * presented token is hashed and compared in constant time; a missing, wrong or
+ * unknown token is indistinguishable from an unknown order.
+ */
+export async function getOrderForGuest(
+  orderId: string,
+  accessToken: string | null,
+): Promise<OrderResponse | null> {
+  if (!accessToken) return null;
+
+  const order = await prisma.order.findFirst({
+    where: { id: orderId, userId: null },
+    select: guestOrderSelect,
+  });
+
+  if (!order) return null;
+  if (!matchesAccessTokenHash(accessToken, order.accessTokenHash)) return null;
+  if (trackingWindowClosed(order, new Date())) return null;
+
+  const expectedDaysByRegion = await loadExpectedDeliveryDays([order.region]);
+  return mapOrder(order, expectedDaysByRegion);
+}
+
 interface ResolvedLine {
   productId: string;
   colorId: string;
@@ -567,6 +612,7 @@ export async function trackOrder(
   if (normalizePhone(order.customerPhone) !== normalizePhone(phone)) {
     return null;
   }
+  if (trackingWindowClosed(order, new Date())) return null;
 
   const expectedDaysByRegion = await loadExpectedDeliveryDays([order.region]);
   const expectedDays =

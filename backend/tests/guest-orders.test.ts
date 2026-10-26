@@ -40,6 +40,15 @@ if (FORBIDDEN_DATABASES.has(testDatabaseName)) {
 process.env.DATABASE_URL = testDatabaseUrl;
 console.log(`Test database: ${testDatabaseName}`);
 
+const jwt = require("jsonwebtoken") as typeof import("jsonwebtoken");
+const { env } = require("../src/lib/env") as typeof import("../src/lib/env");
+
+function signCustomerToken(userId: string): string {
+  return jwt.sign({ sub: userId, role: Role.CUSTOMER }, env.JWT_SECRET, {
+    expiresIn: "7d",
+  });
+}
+
 type AppModule = typeof import("../src/app");
 type PrismaModule = typeof import("../src/lib/prisma");
 
@@ -53,6 +62,7 @@ const createdOrderIds: string[] = [];
 const createdProductIds: string[] = [];
 const createdColorIds: string[] = [];
 const createdZoneIds: string[] = [];
+const createdRiderIds: string[] = [];
 
 before(async () => {
   const prismaModule: PrismaModule = await import("../src/lib/prisma");
@@ -81,6 +91,9 @@ after(async () => {
     await prisma.inventoryLog.deleteMany({ where: { orderId: { in: createdOrderIds } } });
     await prisma.orderItem.deleteMany({ where: { orderId: { in: createdOrderIds } } });
     await prisma.order.deleteMany({ where: { id: { in: createdOrderIds } } });
+  }
+  if (createdRiderIds.length > 0) {
+    await prisma.rider.deleteMany({ where: { id: { in: createdRiderIds } } });
   }
   if (createdColorIds.length > 0) {
     await prisma.inventoryLog.deleteMany({ where: { colorId: { in: createdColorIds } } });
@@ -169,8 +182,51 @@ async function seedFixture() {
     },
     select: { id: true },
   });
+  createdRiderIds.push(rider.id);
 
   return { zone, product, color, user, rider, suffix };
+}
+
+interface WindowOrderFixture {
+  zone: { name: string };
+  product: { id: string };
+  suffix: string;
+}
+
+async function createOrderForWindow(
+  fixture: WindowOrderFixture,
+  label: string,
+  token?: string,
+): Promise<{ orderId: string; reference: string; accessToken: string }> {
+  const headers: Record<string, string> = {
+    "Content-Type": "application/json",
+    "Idempotency-Key": `tracking-window-${label}-${fixture.suffix}-${randomUUID().slice(0, 8)}`,
+  };
+  if (token) headers.Authorization = `Bearer ${token}`;
+
+  const response = await fetch(`${baseUrl}/orders`, {
+    method: "POST",
+    headers,
+    body: JSON.stringify({
+      customerName: "Tracking Window",
+      customerEmail: "tracking-window@test.local",
+      customerPhone: "0244123456",
+      deliveryArea: fixture.zone.name,
+      deliveryAddress: "6 Window Street, Accra",
+      items: [{ productId: fixture.product.id, color: "Black", quantity: 1 }],
+    }),
+  });
+
+  assert.equal(response.status, 201);
+  const body = await response.json();
+  const orderId = stringField(body, "id");
+  const reference = stringField(body, "reference");
+  const accessToken = stringField(body, "accessToken");
+  if (orderId) createdOrderIds.push(orderId);
+  if (!orderId || !reference || !accessToken) {
+    throw new Error("Order creation response is missing tracking fields");
+  }
+  return { orderId, reference, accessToken };
 }
 
 test("guest checkout creates order with access token, hash stored, no raw token persisted; blank email becomes null; replay gives 200 with accessToken null", async () => {
@@ -240,6 +296,135 @@ test("guest checkout creates order with access token, hash stored, no raw token 
 
   const color = await prisma.color.findUnique({ where: { id: fixture.color.id }, select: { stock: true } });
   assert.equal(color?.stock, 18);
+});
+
+test("guest payment email is derived from phone when no email is given", async () => {
+  const fixture = await seedFixture();
+  const idempotencyKey = `guest-init-email-${fixture.suffix}-${randomUUID().slice(0, 8)}`;
+
+  const response = await fetch(`${baseUrl}/orders`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      "Idempotency-Key": idempotencyKey,
+    },
+    body: JSON.stringify({
+      customerName: "Guest Payment",
+      customerEmail: "   ",
+      customerPhone: "0244123456",
+      deliveryArea: fixture.zone.name,
+      deliveryAddress: "3 Guest Street, Accra",
+      items: [{ productId: fixture.product.id, color: "Black", quantity: 1 }],
+    }),
+  });
+
+  assert.equal(response.status, 201);
+  const body = await response.json();
+  const orderId = stringField(body, "id");
+  const accessToken = stringField(body, "accessToken");
+  assert.ok(orderId && orderId.length > 0);
+  if (orderId) createdOrderIds.push(orderId);
+  assert.ok(accessToken && accessToken.length > 0);
+
+  const init = await fetch(`${baseUrl}/payments/initialize`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      "x-order-access-token": accessToken!,
+    },
+    body: JSON.stringify({ orderId: orderId! }),
+  });
+
+  assert.equal(init.status, 200);
+  const initBody = await init.json();
+  assert.equal(
+    stringField(initBody, "email"),
+    "233244123456@afritech.vercel.app",
+  );
+
+  const stored = await prisma.order.findUnique({
+    where: { id: orderId! },
+    select: { customerEmail: true },
+  });
+  assert.equal(stored?.customerEmail, null);
+});
+
+test("guest reads own order with access token", async () => {
+  const fixture = await seedFixture();
+  const idempotencyKey = `guest-read-${fixture.suffix}-${randomUUID().slice(0, 8)}`;
+
+  const created = await fetch(`${baseUrl}/orders`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      "Idempotency-Key": idempotencyKey,
+    },
+    body: JSON.stringify({
+      customerName: "Guest Reader",
+      customerEmail: "   ",
+      customerPhone: "0244123456",
+      deliveryArea: fixture.zone.name,
+      deliveryAddress: "4 Guest Street, Accra",
+      items: [{ productId: fixture.product.id, color: "Black", quantity: 1 }],
+    }),
+  });
+
+  assert.equal(created.status, 201);
+  const createdBody = await created.json();
+  const orderId = stringField(createdBody, "id");
+  const accessToken = stringField(createdBody, "accessToken");
+  assert.ok(orderId && orderId.length > 0);
+  if (orderId) createdOrderIds.push(orderId);
+  assert.ok(accessToken && accessToken.length > 0);
+
+  const read = await fetch(`${baseUrl}/orders/${encodeURIComponent(orderId!)}`, {
+    headers: { "X-Order-Access-Token": accessToken! },
+  });
+
+  assert.equal(read.status, 200);
+  const readBody = await read.json();
+  assert.equal(stringField(readBody, "id"), orderId);
+});
+
+test("guest read is refused without the matching token", async () => {
+  const fixture = await seedFixture();
+  const idempotencyKey = `guest-read-deny-${fixture.suffix}-${randomUUID().slice(0, 8)}`;
+
+  const created = await fetch(`${baseUrl}/orders`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      "Idempotency-Key": idempotencyKey,
+    },
+    body: JSON.stringify({
+      customerName: "Guest Denied",
+      customerEmail: "   ",
+      customerPhone: "0244123456",
+      deliveryArea: fixture.zone.name,
+      deliveryAddress: "5 Guest Street, Accra",
+      items: [{ productId: fixture.product.id, color: "Black", quantity: 1 }],
+    }),
+  });
+
+  assert.equal(created.status, 201);
+  const createdBody = await created.json();
+  const orderId = stringField(createdBody, "id");
+  assert.ok(orderId && orderId.length > 0);
+  if (orderId) createdOrderIds.push(orderId);
+
+  const unknown = await fetch(`${baseUrl}/orders/does-not-exist`);
+  assert.equal(unknown.status, 404);
+  const notFoundBody = await unknown.json();
+
+  const withoutToken = await fetch(`${baseUrl}/orders/${encodeURIComponent(orderId!)}`);
+  assert.equal(withoutToken.status, 404);
+  assert.deepEqual(await withoutToken.json(), notFoundBody);
+
+  const wrongToken = await fetch(`${baseUrl}/orders/${encodeURIComponent(orderId!)}`, {
+    headers: { "X-Order-Access-Token": "wrong-token-value" },
+  });
+  assert.equal(wrongToken.status, 404);
+  assert.deepEqual(await wrongToken.json(), notFoundBody);
 });
 
 test("track order happy path, phone formats, wrong/missing identical 404, rider appears after dispatched", async () => {
@@ -328,4 +513,97 @@ test("track order happy path, phone formats, wrong/missing identical 404, rider 
   const t3 = await trackDispatched.json();
   const rider = field(t3, "rider") as any;
   assert.ok(rider && typeof rider.name === "string" && typeof rider.phone === "string");
+});
+
+test("track order returns an order with no delivery date", async () => {
+  const fixture = await seedFixture();
+  const order = await createOrderForWindow(fixture, "open");
+
+  const stored = await prisma.order.findUnique({
+    where: { id: order.orderId },
+    select: { deliveredAt: true },
+  });
+  assert.equal(stored?.deliveredAt, null);
+
+  const response = await fetch(
+    `${baseUrl}/orders/track?reference=${encodeURIComponent(order.reference)}&phone=${encodeURIComponent("0244123456")}`,
+  );
+  assert.equal(response.status, 200);
+  const body = await response.json();
+  assert.equal(stringField(body, "reference"), order.reference);
+  assert.equal(field(body, "deliveredAt"), undefined);
+});
+
+test("track order returns a delivery inside the grace window", async () => {
+  const fixture = await seedFixture();
+  const order = await createOrderForWindow(fixture, "recent");
+
+  await prisma.order.update({
+    where: { id: order.orderId },
+    data: { deliveredAt: new Date(Date.now() - 60 * 60 * 1000) },
+  });
+
+  const response = await fetch(
+    `${baseUrl}/orders/track?reference=${encodeURIComponent(order.reference)}&phone=${encodeURIComponent("0244123456")}`,
+  );
+  assert.equal(response.status, 200);
+  const body = await response.json();
+  assert.equal(stringField(body, "reference"), order.reference);
+  assert.equal(field(body, "deliveredAt"), undefined);
+});
+
+test("track and guest read return the unknown-order body after the grace window", async () => {
+  const fixture = await seedFixture();
+  const order = await createOrderForWindow(fixture, "closed");
+
+  await prisma.order.update({
+    where: { id: order.orderId },
+    data: { deliveredAt: new Date(Date.now() - 3 * 24 * 60 * 60 * 1000) },
+  });
+
+  const unknownTrack = await fetch(
+    `${baseUrl}/orders/track?reference=${encodeURIComponent(`UNKNOWN-${fixture.suffix}`)}&phone=${encodeURIComponent("0244123456")}`,
+  );
+  assert.equal(unknownTrack.status, 404);
+  const unknownTrackBody = await unknownTrack.json();
+
+  const closedTrack = await fetch(
+    `${baseUrl}/orders/track?reference=${encodeURIComponent(order.reference)}&phone=${encodeURIComponent("0244123456")}`,
+  );
+  assert.equal(closedTrack.status, 404);
+  assert.deepEqual(await closedTrack.json(), unknownTrackBody);
+
+  const unknownGuest = await fetch(
+    `${baseUrl}/orders/${encodeURIComponent(`unknown-${fixture.suffix}`)}`,
+  );
+  assert.equal(unknownGuest.status, 404);
+  const unknownGuestBody = await unknownGuest.json();
+
+  const closedGuest = await fetch(
+    `${baseUrl}/orders/${encodeURIComponent(order.orderId)}`,
+    { headers: { "X-Order-Access-Token": order.accessToken } },
+  );
+  assert.equal(closedGuest.status, 404);
+  assert.deepEqual(await closedGuest.json(), unknownGuestBody);
+  assert.deepEqual(unknownGuestBody, unknownTrackBody);
+});
+
+test("signed-in owner can read an order after the tracking grace window", async () => {
+  const fixture = await seedFixture();
+  const token = signCustomerToken(fixture.user.id);
+  const order = await createOrderForWindow(fixture, "owner", token);
+
+  await prisma.order.update({
+    where: { id: order.orderId },
+    data: { deliveredAt: new Date(Date.now() - 3 * 24 * 60 * 60 * 1000) },
+  });
+
+  const response = await fetch(
+    `${baseUrl}/orders/${encodeURIComponent(order.orderId)}`,
+    { headers: { Authorization: `Bearer ${token}` } },
+  );
+  assert.equal(response.status, 200);
+  const body = await response.json();
+  assert.equal(stringField(body, "id"), order.orderId);
+  assert.equal(field(body, "deliveredAt"), undefined);
 });
