@@ -61,7 +61,6 @@ export default function ConfirmationPage() {
       // on screen; if the load failed, keep it so Try again can use it.
       try {
         if (typeof window !== 'undefined') {
-          window.localStorage.removeItem(`afritech-order-token:${orderId}`);
         }
       } catch {}
     } catch (caught) {
@@ -87,9 +86,6 @@ export default function ConfirmationPage() {
     }
 
     setCopied(true);
-    if (copyTimeoutRef.current !== null) {
-      window.clearTimeout(copyTimeoutRef.current);
-    }
     copyTimeoutRef.current = window.setTimeout(() => {
       setCopied(false);
       copyTimeoutRef.current = null;
