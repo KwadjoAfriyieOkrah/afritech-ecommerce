@@ -2,7 +2,7 @@
 
 import Link from 'next/link';
 import { useParams } from 'next/navigation';
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { HiCheck, HiOutlineClock, HiOutlineMap, HiOutlineMail, HiOutlineTruck } from 'react-icons/hi';
 import { ApiError, getOrder } from '@/services/api';
 import { useUserStore } from '@/store';
@@ -34,6 +34,8 @@ export default function ConfirmationPage() {
   const [order, setOrder] = useState<Order | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [copied, setCopied] = useState(false);
+  const copyTimeoutRef = useRef<number | null>(null);
 
   const load = useCallback(async () => {
     if (!orderId) {
@@ -45,8 +47,23 @@ export default function ConfirmationPage() {
     setIsLoading(true);
     setError(null);
 
+    let accessToken: string | null = null;
     try {
-      setOrder(await getOrder(orderId));
+      if (typeof window !== 'undefined') {
+        accessToken = window.localStorage.getItem(`afritech-order-token:${orderId}`);
+      }
+    } catch {}
+
+    try {
+      const loaded = await getOrder(orderId, accessToken);
+      setOrder(loaded);
+      // The token is only needed to load this order. Drop it once the order is
+      // on screen; if the load failed, keep it so Try again can use it.
+      try {
+        if (typeof window !== 'undefined') {
+          window.localStorage.removeItem(`afritech-order-token:${orderId}`);
+        }
+      } catch {}
     } catch (caught) {
       setError(ApiError.from(caught).message);
     } finally {
@@ -57,6 +74,35 @@ export default function ConfirmationPage() {
   useEffect(() => {
     void load();
   }, [load]);
+
+  const copyReference = useCallback(async () => {
+    const reference = order?.reference;
+    if (!reference) return;
+    if (typeof navigator === 'undefined' || !navigator.clipboard) return;
+
+    try {
+      await navigator.clipboard.writeText(reference);
+    } catch {
+      return;
+    }
+
+    setCopied(true);
+    if (copyTimeoutRef.current !== null) {
+      window.clearTimeout(copyTimeoutRef.current);
+    }
+    copyTimeoutRef.current = window.setTimeout(() => {
+      setCopied(false);
+      copyTimeoutRef.current = null;
+    }, 2000);
+  }, [order?.reference]);
+
+  useEffect(() => {
+    return () => {
+      if (copyTimeoutRef.current !== null) {
+        window.clearTimeout(copyTimeoutRef.current);
+      }
+    };
+  }, []);
 
   if (isLoading) {
     return (
@@ -122,8 +168,21 @@ export default function ConfirmationPage() {
 
           <p className="mt-1 flex flex-col items-center gap-1">
             <span className="text-xs uppercase tracking-wide text-stone-500">Order reference</span>
-            <span className="rounded-lg bg-light-gold px-4 py-1.5 font-mono text-lg font-bold tracking-wider text-dark-gold">
-              {order.reference}
+            <span className="flex items-center gap-2">
+              <span className="rounded-lg bg-light-gold px-4 py-1.5 font-mono text-lg font-bold tracking-wider text-dark-gold">
+                {order.reference}
+              </span>
+              <button
+                type="button"
+                onClick={() => void copyReference()}
+                className="rounded-md border border-stone-200 px-2.5 py-1 text-xs font-medium text-stone-600 transition hover:border-dark-gold hover:text-dark-gold"
+              >
+                {copied ? 'Copied' : 'Copy'}
+              </button>
+            </span>
+            <span className="text-xs text-stone-500">
+              Save this reference and the phone number you paid with. You&apos;ll use them on Track
+              Order to check your delivery.
             </span>
             {referenceDate && (
               <span className="text-xs text-stone-400">Placed on {formatDateTime(referenceDate)}</span>
