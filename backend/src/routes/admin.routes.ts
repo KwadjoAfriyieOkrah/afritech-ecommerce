@@ -9,6 +9,16 @@ import {
 import multer from "multer";
 
 import {
+  assignRiderHandler,
+  createAdminRiderHandler,
+  dispatchOrderHandler,
+  getAdminOrderHandler,
+  listAdminOrdersHandler,
+  listAdminRidersHandler,
+  markDeliveredHandler,
+  moveToPackagingHandler,
+} from "../controllers/admin-orders.controller";
+import {
   addProductImageHandler,
   bulkImportProductsHandler,
   createProductHandler,
@@ -76,6 +86,22 @@ router.use(requireRole(Role.ADMIN));
 router.get("/fulfillment/queue", (_req, res) => {
   res.status(200).json({ status: "ok" });
 });
+
+router.get("/orders", listAdminOrdersHandler);
+
+router.get("/orders/:id", getAdminOrderHandler);
+
+router.get("/riders", listAdminRidersHandler);
+
+router.post("/riders", createAdminRiderHandler);
+
+router.post("/orders/:id/rider", assignRiderHandler);
+
+router.post("/orders/:id/packaging", moveToPackagingHandler);
+
+router.post("/orders/:id/dispatch", dispatchOrderHandler);
+
+router.post("/orders/:id/delivered", markDeliveredHandler);
 
 router.post(
   "/products/:id/images",
