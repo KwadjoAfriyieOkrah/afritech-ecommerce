@@ -89,7 +89,7 @@ export async function initializePaymentHandler(
       reference: result.reference,
       amount: result.amount,
       currency: result.currency,
-      email: result.customerEmail,
+      email: result.providerEmail,
     };
     res.status(200).json(body);
   } catch (error) {

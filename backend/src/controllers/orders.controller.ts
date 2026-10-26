@@ -4,6 +4,7 @@ import type { ZodError } from "zod";
 import { UNAUTHORIZED_MESSAGE } from "../middleware/requireAuth";
 import {
   createOrder,
+  getOrderForGuest,
   getOrderForUser,
   IdempotencyKeyConflictError,
   InsufficientStockError,
@@ -20,6 +21,7 @@ import {
 const MIN_IDEMPOTENCY_KEY_LENGTH = 16;
 const MAX_IDEMPOTENCY_KEY_LENGTH = 64;
 const MAX_ORDER_ID_LENGTH = 64;
+const MAX_ACCESS_TOKEN_LENGTH = 256;
 
 // Single source for the not-found body. Every miss path (unknown id, another
 // user's order, guest order, malformed id) sends this exact object so the
@@ -32,6 +34,20 @@ function isValidOrderId(value: unknown): value is string {
     value.length > 0 &&
     value.length <= MAX_ORDER_ID_LENGTH
   );
+}
+
+// A guest authorises itself with the order access token it received when the
+// order was created. The header is only read here; the comparison against the
+// stored hash happens in the service, in constant time.
+function readOrderAccessToken(req: Request): string | null {
+  const raw: unknown = req.headers["x-order-access-token"];
+  const value = Array.isArray(raw) ? raw[0] : raw;
+  if (typeof value !== "string") return null;
+  const trimmed = value.trim();
+  if (trimmed.length === 0 || trimmed.length > MAX_ACCESS_TOKEN_LENGTH) {
+    return null;
+  }
+  return trimmed;
 }
 
 function readIdempotencyKey(req: Request): string | null {
@@ -77,18 +93,20 @@ export async function listOrders(req: Request, res: Response): Promise<void> {
 }
 
 export async function getOrder(req: Request, res: Response): Promise<void> {
-  const user = req.authUser;
-  if (!user) {
-    res.status(401).json({ error: UNAUTHORIZED_MESSAGE });
-    return;
-  }
-
   try {
     const rawId: unknown = req.params.id;
-    const order = isValidOrderId(rawId)
-      ? await getOrderForUser(user.id, rawId)
-      : null;
+    if (!isValidOrderId(rawId)) {
+      res.status(404).json(ORDER_NOT_FOUND_BODY);
+      return;
+    }
 
+    const user = req.authUser;
+    const order = user
+      ? await getOrderForUser(user.id, rawId)
+      : await getOrderForGuest(rawId, readOrderAccessToken(req));
+
+    // Unknown ids, another customer's order and a missing or wrong guest token
+    // all get the same body, so a guest is never told that the order exists.
     if (!order) {
       res.status(404).json(ORDER_NOT_FOUND_BODY);
       return;

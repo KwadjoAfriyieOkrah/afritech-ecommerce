@@ -13,6 +13,10 @@ const envSchema = z.object({
     .min(1, "DATABASE_URL is required (postgresql://...)"),
   JWT_SECRET: z.string().min(32, "JWT_SECRET must be at least 32 characters"),
   PAYSTACK_SECRET_KEY: z.string().min(1, "PAYSTACK_SECRET_KEY is required"),
+  GUEST_PAYMENT_EMAIL_DOMAIN: z
+    .string()
+    .min(1)
+    .default("afritech.vercel.app"),
   FRONTEND_URL: z.string().url("FRONTEND_URL must be a valid URL"),
 });
 

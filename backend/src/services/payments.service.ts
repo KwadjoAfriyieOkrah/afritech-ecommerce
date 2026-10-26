@@ -31,7 +31,6 @@ import {
 } from "./payment-settlement";
 
 const PAYSTACK_API_BASE = "https://api.paystack.co";
-const SYSTEM_EMAIL_DOMAIN = "noreply.afritech.local";
 
 /**
  * The caller of a payment endpoint. A signed-in customer is identified by
@@ -206,10 +205,15 @@ function isAuthorizedForOrder(
 }
 
 // The address a provider request is built with when the customer left no
-// email. It is a placeholder for the provider only: it is never stored on the
-// order and never sent to the client.
-function systemOrderEmail(reference: string): string {
-  return `order-${reference.toLowerCase()}@${SYSTEM_EMAIL_DOMAIN}`;
+// email. It is derived from the stored phone and is a placeholder for the
+// provider only: it is never stored on the order and never sent to the client.
+function guestPaymentEmail(phone: string): string {
+  const stripped = phone.replace(/[\s-]/g, "").replace(/^\+/, "");
+  const withCountryCode = stripped.startsWith("0")
+    ? `233${stripped.slice(1)}`
+    : stripped;
+  const digits = withCountryCode.replace(/\D/g, "");
+  return `${digits}@${env.GUEST_PAYMENT_EMAIL_DOMAIN}`;
 }
 
 /**
@@ -238,6 +242,7 @@ export async function initializePayment(
       id: true,
       reference: true,
       customerEmail: true,
+      customerPhone: true,
       total: true,
       paymentStatus: true,
       reservedUntil: true,
@@ -305,7 +310,7 @@ export async function initializePayment(
         reference,
         amount: Number(amountPesewas),
         providerEmail:
-          order.customerEmail ?? systemOrderEmail(order.reference),
+          order.customerEmail ?? guestPaymentEmail(order.customerPhone),
         customerEmail: order.customerEmail,
         currency: PAYSTACK_CURRENCY,
       };

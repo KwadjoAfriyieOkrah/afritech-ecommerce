@@ -18,6 +18,6 @@ router.get("/track", trackOrderHandler);
 router.get("/", requireAuth, listOrders);
 // Guests may check out without an account.
 router.post("/", optionalAuth, submitOrder);
-router.get("/:id", requireAuth, getOrder);
+router.get("/:id", optionalAuth, getOrder);
 
 export default router;
