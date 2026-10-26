@@ -1,6 +1,8 @@
 import { create } from 'zustand';
 import { createJSONStorage, persist } from 'zustand/middleware';
 
+export type CartStockStatus = 'ok' | 'insufficient' | 'unavailable';
+
 export interface CartItem {
   productId: string;
   name: string;
@@ -13,6 +15,11 @@ export interface CartItem {
    * before this field existed do not carry it.
    */
   soldOut?: boolean;
+  stockStatus?: CartStockStatus;
+  availableStock?: number;
+  /** Set when the server price differs from the price the customer saw. */
+  priceChanged?: boolean;
+  previousPrice?: number;
 }
 
 export interface CartState {
@@ -29,6 +36,21 @@ export interface CartState {
    * customer removes it.
    */
   syncSoldOutStatus: (products: Array<{ id: string; soldOut: boolean }>) => void;
+  /**
+   * Applies the server's read-only availability result to each cart line:
+   * stock status, remaining stock and the authoritative unit price. Lines are
+   * never removed here; the customer decides whether to change or remove one.
+   */
+  syncAvailability: (
+    results: Array<{
+      productId: string;
+      color: string;
+      quantity: number;
+      unitPrice: string;
+      available: number;
+      status: CartStockStatus;
+    }>
+  ) => void;
 }
 
 export const CART_STORAGE_KEY = 'afritech-cart';
@@ -113,6 +135,48 @@ export const useCartStore = create<CartState>()(
           });
 
           return changed ? { items } : state;
+        }),
+
+      syncAvailability: (results) =>
+        set((state) => {
+          const byLine = new Map<string, (typeof results)[number]>();
+          for (const result of results) {
+            byLine.set(`${result.productId}::${result.color}`, result);
+          }
+
+          let changed = false;
+          const items = state.items.map((item) => {
+            const result = byLine.get(`${item.productId}::${item.color ?? ''}`);
+            if (!result) return item;
+
+            const serverPrice = Number(result.unitPrice);
+            const hasServerPrice = Number.isFinite(serverPrice);
+            const nextPrice = hasServerPrice ? serverPrice : item.price;
+            const priceChanged = hasServerPrice && nextPrice !== item.price;
+
+            const unchanged =
+              item.stockStatus === result.status &&
+              item.availableStock === result.available &&
+              item.price === nextPrice &&
+              Boolean(item.priceChanged) === priceChanged &&
+              item.previousPrice === (priceChanged ? item.price : undefined);
+
+            if (unchanged) return item;
+
+            changed = true;
+            return {
+              ...item,
+              price: nextPrice,
+              stockStatus: result.status,
+              availableStock: result.available,
+              priceChanged,
+              previousPrice: priceChanged ? item.price : undefined
+            };
+          });
+
+          return changed
+            ? { items, totalPrice: sumItems(items) }
+            : state;
         })
     }),
     {

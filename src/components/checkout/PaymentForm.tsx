@@ -20,7 +20,6 @@ import { OrderStatus, type DeliveryInfo, type Order, type PaymentAttempt } from 
 import { ErrorBoundary } from '@/components/shared/ErrorBoundary';
 import { formatCedis } from '@/utils/format';
 import { resolveReference } from '@/utils/orderReference';
-import { validateEmail } from '@/utils/validators';
 
 const PAYSTACK_PUBLIC_KEY = process.env.NEXT_PUBLIC_PAYSTACK_PUBLIC_KEY ?? '';
 
@@ -31,10 +30,20 @@ function isUsableKey(key: string): boolean {
 interface PaymentFormProps {
   zones: DeliveryZone[];
   deliveryInfo: DeliveryInfo;
+  /** Re-runs the read-only availability check. Returns true when every line is ok. */
+  onBeforePay?: () => Promise<boolean>;
+  /** Called after an expired-reservation 409 so the page can refresh stock. */
+  onReservationExpired?: () => Promise<void>;
   onProcessingChange?: (processing: boolean) => void;
 }
 
-export function PaymentForm({ zones, deliveryInfo, onProcessingChange }: PaymentFormProps) {
+export function PaymentForm({
+  zones,
+  deliveryInfo,
+  onBeforePay,
+  onReservationExpired,
+  onProcessingChange
+}: PaymentFormProps) {
   const router = useRouter();
 
   const items = useCartStore((state) => state.items);
@@ -61,7 +70,6 @@ export function PaymentForm({ zones, deliveryInfo, onProcessingChange }: Payment
 
   const email = deliveryInfo.customerEmail || loggedInEmail || '';
   const keyReady = isUsableKey(PAYSTACK_PUBLIC_KEY);
-  const emailReady = validateEmail(email);
 
   const subtotal = useMemo(
     () => items.reduce((sum, item) => sum + item.price * item.quantity, 0),
@@ -82,6 +90,7 @@ export function PaymentForm({ zones, deliveryInfo, onProcessingChange }: Payment
   const totalToShow = order ? order.totalPrice : subtotal + deliveryFee;
 
   const isBusy = phase !== 'idle';
+  const availabilityBlocked = items.some((item) => item.stockStatus !== 'ok');
 
   // Paystack's client callback only proves the window closed; it is not proof
   // of payment. The order is marked paid, the cart and checkout key are
@@ -93,7 +102,13 @@ export function PaymentForm({ zones, deliveryInfo, onProcessingChange }: Payment
       setStep('verifying');
 
       try {
-        const verification = await verifyOrderPayment(transactionReference, current.id);
+        let tokenForVerify: string | null = null;
+        try {
+          if (typeof window !== 'undefined') {
+            tokenForVerify = window.localStorage.getItem(`afritech-order-token:${current.id}`);
+          }
+        } catch {}
+        const verification = await verifyOrderPayment(transactionReference, current.id, tokenForVerify);
 
         if (!verification?.verified) {
           throw new ApiError(
@@ -135,13 +150,26 @@ export function PaymentForm({ zones, deliveryInfo, onProcessingChange }: Payment
     // cannot start a second order creation or a second payment attempt.
     if (phase !== 'idle' || modalOpen.current) return;
 
-    if (!userId) {
-      toast.error('Your session ended. Please sign in again to place the order.');
-      return;
-    }
+    // Guests (no userId) can checkout without account; don't block on session.
 
     if (!deliveryAvailable) {
       toast.error('Delivery is not available to this area.');
+      return;
+    }
+
+    // Re-check stock and price immediately before creating the order. The
+    // server is the authority, so a stale cart must never be submitted.
+    if (onBeforePay) {
+      const available = await onBeforePay();
+      if (!available) {
+        toast.error('Some items need your attention before you can pay.');
+        return;
+      }
+    }
+
+    const currentItems = useCartStore.getState().items;
+    if (currentItems.length === 0) {
+      toast.error('Your cart is empty. Add a product before checking out again.');
       return;
     }
 
@@ -155,11 +183,17 @@ export function PaymentForm({ zones, deliveryInfo, onProcessingChange }: Payment
       // failure reuses this key so the server replays the same order instead of
       // creating a second one. It is never rotated to retry a payment: the same
       // order is reused and only its payment reference is renewed.
-      const idempotencyKey = getCheckoutIdempotencyKey(userId);
+      const idempotencyKey = getCheckoutIdempotencyKey(userId || 'guest');
+
+      // Try to reuse stored token for idempotent replay
+      let storedToken: string | null = null;
+      if (typeof window !== 'undefined') {
+        // We'll check after getting orderId if needed
+      }
 
       const response = await createOrder(
         {
-          items: items.map((item) => ({
+          items: currentItems.map((item) => ({
             productId: item.productId,
             quantity: item.quantity,
             color: item.color,
@@ -167,7 +201,7 @@ export function PaymentForm({ zones, deliveryInfo, onProcessingChange }: Payment
           })),
           customerName: deliveryInfo.customerName,
           customerPhone: deliveryInfo.customerPhone,
-          customerEmail: email,
+          customerEmail: deliveryInfo.customerEmail.trim() ? deliveryInfo.customerEmail.trim() : '',
           deliveryArea: deliveryInfo.deliveryArea,
           deliveryAddress: deliveryInfo.deliveryAddress
         },
@@ -178,16 +212,39 @@ export function PaymentForm({ zones, deliveryInfo, onProcessingChange }: Payment
         throw new ApiError('The server returned an order without an id.', 500, 'INVALID_ORDER');
       }
 
+      // Handle access token
+      const accessToken = (response as any).accessToken;
+      if (accessToken) {
+        try {
+          if (typeof window !== 'undefined') {
+            window.localStorage.setItem(`afritech-order-token:${response.id}`, accessToken);
+            window.localStorage.setItem('afritech-last-order', JSON.stringify({ orderId: response.id, reference: response.reference }));
+          }
+        } catch {}
+      } else {
+        // Replay case - try to get stored token
+        try {
+          if (typeof window !== 'undefined') {
+            storedToken = window.localStorage.getItem(`afritech-order-token:${response.id}`);
+          }
+        } catch {}
+        if (!storedToken) {
+          clearCheckoutIdempotencyKey();
+          modalOpen.current = false;
+          setStep('idle');
+          toast.error('Your order needs to be placed again. Tap Pay once more.');
+          return;
+        }
+      }
+
       created = { ...response, reference: resolveReference(response.reference) };
     } catch (caught) {
       modalOpen.current = false;
       setStep('idle');
 
-      // A 401 means the session ended. The response interceptor already cleared
-      // the account, so checkout swaps in its sign-in step; point the visitor
-      // there instead of showing the raw server message.
+      // A 401 means the session ended - no longer redirect to sign-in
       if (ApiError.isApiError(caught) && caught.status === 401) {
-        toast.error('Your session ended. Please sign in again to finish your order.');
+        toast.error(ApiError.from(caught).message || 'Order creation failed.');
         return;
       }
 
@@ -202,13 +259,44 @@ export function PaymentForm({ zones, deliveryInfo, onProcessingChange }: Payment
     let attempt: PaymentAttempt;
 
     try {
+      // Get stored token
+      let tokenForInit: string | null = null;
+      try {
+        if (typeof window !== 'undefined') {
+          tokenForInit = window.localStorage.getItem(`afritech-order-token:${created.id}`);
+        }
+      } catch {}
       // The backend owns the reference, the amount and the email. Retrying an
       // unpaid order returns a fresh reference for the same order, so a
       // cancelled or failed attempt never needs a second order or new stock.
-      attempt = await initializePayment(created.id);
+      attempt = await initializePayment(created.id, tokenForInit);
     } catch (caught) {
       modalOpen.current = false;
       setStep('idle');
+
+      const conflict =
+        ApiError.isApiError(caught) &&
+        caught.status === 409 &&
+        /can no longer be paid|already paid/i.test(caught.message);
+      const expired = conflict && /can no longer be paid/i.test(caught.message);
+
+      if (conflict) {
+        // The order can no longer be used (reservation expired or already
+        // paid). Forget this attempt so the next tap starts a fresh order
+        // instead of reusing the dead idempotency key. The order token is kept
+        // so the confirmation page can still load the order.
+        clearCheckoutIdempotencyKey();
+        setOrder(null);
+        setCurrentOrder(null);
+        toast.error(
+          expired
+            ? 'Your reservation expired. We have checked stock again.'
+            : ApiError.from(caught).message
+        );
+        await onReservationExpired?.();
+        return;
+      }
+
       toast.error(ApiError.from(caught).message);
       return;
     }
@@ -293,14 +381,36 @@ export function PaymentForm({ zones, deliveryInfo, onProcessingChange }: Payment
             const key = `${item.productId}-${item.color ?? 'none'}`;
 
             return (
-              <li key={key} className="flex justify-between gap-4">
-                <span className="text-stone-600">
-                  {item.quantity} x {item.name || item.productId}
-                  {item.color ? ` (${item.color})` : ''}
-                </span>
-                <span className="font-medium text-ink">
-                  {formatCedis(item.price * item.quantity)}
-                </span>
+              <li key={key} className="flex flex-col gap-1">
+                <div className="flex justify-between gap-4">
+                  <span className="text-stone-600">
+                    {item.quantity} x {item.name || item.productId}
+                    {item.color ? ` (${item.color})` : ''}
+                  </span>
+                  <span className="font-medium text-ink">
+                    {formatCedis(item.price * item.quantity)}
+                  </span>
+                </div>
+
+                {item.stockStatus === 'insufficient' && (
+                  <p className="text-xs font-medium text-red-600">
+                    Only {item.availableStock ?? 0} left in {item.color}. Reduce the quantity to
+                    continue.
+                  </p>
+                )}
+
+                {item.stockStatus === 'unavailable' && (
+                  <p className="text-xs font-medium text-red-600">
+                    {item.name || item.productId} in {item.color} is sold out. Remove it to
+                    continue.
+                  </p>
+                )}
+
+                {item.priceChanged && (
+                  <p className="text-xs font-medium text-amber-700">
+                    Price updated to GHS {item.price.toFixed(2)}
+                  </p>
+                )}
               </li>
             );
           })}
@@ -332,12 +442,6 @@ export function PaymentForm({ zones, deliveryInfo, onProcessingChange }: Payment
           </div>
         </dl>
 
-        {!emailReady && (
-          <p className="rounded-lg border border-amber-300 bg-amber-50 px-4 py-3 text-sm text-amber-800">
-            Paystack needs a valid email address. Go back to delivery details and add yours.
-          </p>
-        )}
-
         {!keyReady && (
           <p className="rounded-lg border border-amber-300 bg-amber-50 px-4 py-3 text-sm text-amber-800">
             Paystack is not configured. Set NEXT_PUBLIC_PAYSTACK_PUBLIC_KEY in .env.local to a
@@ -364,10 +468,20 @@ export function PaymentForm({ zones, deliveryInfo, onProcessingChange }: Payment
           )}
         </div>
 
+        <div className="rounded-lg border border-yellow-300 bg-yellow-50 px-4 py-3 text-sm text-yellow-900">
+          <p className="font-semibold">How payment works</p>
+          <p className="mt-1">
+            Enter your name, phone number and delivery details, then tap Place Order. You'll be taken to Paystack's secure payment page. Choose Mobile Money, enter your number, and approve the payment with your MoMo PIN when the prompt appears on your phone. You may first be asked for a code sent to your phone. Your order is confirmed when payment goes through. Your item is reserved for 15 minutes.
+          </p>
+          <p className="mt-2">
+            Keep your order reference. Track your order any time under Track Order, using your reference and phone number.
+          </p>
+        </div>
+
         <button
           type="button"
           onClick={() => void handlePay()}
-          disabled={isBusy || !keyReady || !emailReady || !deliveryAvailable}
+          disabled={isBusy || !keyReady || !deliveryAvailable || availabilityBlocked}
           className="btn btn-primary w-full"
         >
           {phase === 'creating' && 'Saving order...'}

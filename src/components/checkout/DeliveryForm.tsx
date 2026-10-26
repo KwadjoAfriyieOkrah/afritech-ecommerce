@@ -5,7 +5,7 @@ import { HiOutlineExclamation } from 'react-icons/hi';
 import { useUserStore } from '@/store';
 import type { DeliveryZone } from '@/services/api';
 import type { DeliveryInfo } from '@/types';
-import { validateAddress, validateEmail, validatePhoneGH } from '@/utils/validators';
+import { validateAddress, validatePhoneGH } from '@/utils/validators';
 import { expectedDeliveryDate, formatCedis, formatDeliveryDays } from '@/utils/format';
 
 interface DeliveryFormProps {
@@ -15,7 +15,6 @@ interface DeliveryFormProps {
 
 type FieldName =
   | 'customerName'
-  | 'customerEmail'
   | 'customerPhone'
   | 'deliveryArea'
   | 'deliveryAddress';
@@ -72,10 +71,7 @@ export function DeliveryForm({ zones, onComplete }: DeliveryFormProps) {
       nextErrors.customerName = 'Enter the recipient full name (at least 2 characters)';
     }
     if (!validatePhoneGH(deliveryInfo.customerPhone)) {
-      nextErrors.customerPhone = 'Enter a valid Ghana number, e.g. 0241234567';
-    }
-    if (!validateEmail(deliveryInfo.customerEmail)) {
-      nextErrors.customerEmail = 'Enter a valid email, e.g. you@example.com';
+      nextErrors.customerPhone = 'Enter a valid phone number, for example 0244123456';
     }
     if (!deliveryInfo.deliveryArea) {
       nextErrors.deliveryArea = 'Choose a delivery area';
@@ -177,7 +173,7 @@ export function DeliveryForm({ zones, onComplete }: DeliveryFormProps) {
 
         <div className="sm:col-span-1">
           <label htmlFor="customerPhone" className="label">
-            Phone number
+            Phone
           </label>
           <input
             id="customerPhone"
@@ -186,7 +182,7 @@ export function DeliveryForm({ zones, onComplete }: DeliveryFormProps) {
             inputMode="tel"
             autoComplete="tel"
             className={`input ${errors.customerPhone ? ERROR_CLASS : ''}`}
-            placeholder="0241234567"
+            placeholder="0244123456"
             value={deliveryInfo.customerPhone}
             onChange={(event) => {
               updateDeliveryInfo({ customerPhone: event.target.value });
@@ -196,29 +192,6 @@ export function DeliveryForm({ zones, onComplete }: DeliveryFormProps) {
             aria-describedby={errors.customerPhone ? 'customerPhone-error' : undefined}
           />
           <FieldError id="customerPhone-error" message={errors.customerPhone} />
-        </div>
-
-        <div className="sm:col-span-2">
-          <label htmlFor="customerEmail" className="label">
-            Email address
-          </label>
-          <input
-            id="customerEmail"
-            name="customerEmail"
-            type="email"
-            inputMode="email"
-            autoComplete="email"
-            className={`input ${errors.customerEmail ? ERROR_CLASS : ''}`}
-            placeholder="you@example.com"
-            value={deliveryInfo.customerEmail}
-            onChange={(event) => {
-              updateDeliveryInfo({ customerEmail: event.target.value });
-              setErrors((current) => ({ ...current, customerEmail: undefined }));
-            }}
-            aria-invalid={Boolean(errors.customerEmail)}
-            aria-describedby={errors.customerEmail ? 'customerEmail-error' : undefined}
-          />
-          <FieldError id="customerEmail-error" message={errors.customerEmail} />
         </div>
 
         <div className="sm:col-span-2">

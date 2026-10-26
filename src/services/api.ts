@@ -146,9 +146,12 @@ api.interceptors.response.use(
     }
 
     if (error.response?.status === 401) {
-      // Token is unusable: drop it and reflect that in the UI immediately.
-      clearAuthToken();
-      useUserStore.getState().setUser(null);
+      // Only treat as expired session if a token was sent
+      const hadToken = Boolean(getAuthToken());
+      if (hadToken) {
+        clearAuthToken();
+        useUserStore.getState().setUser(null);
+      }
     }
 
     throw ApiError.from(error);
@@ -182,6 +185,45 @@ export async function getProduct(id: string): Promise<Product> {
   if (isMockApiEnabled()) return mockGetProduct(id);
 
   const { data } = await api.get<Product>(`/products/${encodeURIComponent(id)}`);
+  return data;
+}
+
+export type AvailabilityStatus = 'ok' | 'insufficient' | 'unavailable';
+
+export interface AvailabilityLine {
+  productId: string;
+  color: string;
+  quantity: number;
+  unitPrice: string;
+  available: number;
+  status: AvailabilityStatus;
+}
+
+export interface AvailabilityRequestLine {
+  productId: string;
+  color: string;
+  quantity: number;
+}
+
+export async function checkAvailability(
+  items: AvailabilityRequestLine[]
+): Promise<AvailabilityLine[]> {
+  if (isMockApiEnabled()) {
+    return items.map((item) => ({
+      productId: item.productId,
+      color: item.color,
+      quantity: item.quantity,
+      unitPrice: '0.00',
+      available: item.quantity,
+      status: 'ok'
+    }));
+  }
+
+  const { data } = await api.post<AvailabilityLine[]>(
+    '/products/availability',
+    { items },
+    { retry: false }
+  );
   return data;
 }
 
@@ -220,15 +262,21 @@ export function createIdempotencyKey(): string {
 
 export async function createOrder(
   data: CreateOrderRequestBody,
-  idempotencyKey: string
-): Promise<Order> {
+  idempotencyKey: string,
+  accessToken?: string | null
+): Promise<Order & { accessToken?: string | null }> {
   if (isMockApiEnabled()) {
     // The mock only echoes a display value; the real request omits this field.
     return mockCreateOrder({ ...data, expectedDeliveryDate: '' });
   }
 
-  const { data: order } = await api.post<Order>('/orders', data, {
-    headers: { 'Idempotency-Key': idempotencyKey }
+  const headers: Record<string, string> = { 'Idempotency-Key': idempotencyKey };
+  if (accessToken) {
+    headers['X-Order-Access-Token'] = accessToken;
+  }
+
+  const { data: order } = await api.post<Order & { accessToken?: string | null }>('/orders', data, {
+    headers
   });
   return order;
 }
@@ -239,26 +287,38 @@ export async function createOrder(
  * amount, currency and email) to open Paystack with. Calling it again for the
  * same order issues a new reference without creating another order.
  */
-export async function initializePayment(orderId: string): Promise<PaymentAttempt> {
+export async function initializePayment(orderId: string, accessToken?: string | null): Promise<PaymentAttempt> {
   // Mock mode keeps the whole order in the browser and never reaches the
   // backend, so the attempt is minted client-side there only.
   if (isMockApiEnabled()) return mockInitializePayment(orderId);
 
-  // `baseURL: ''` routes this through the Next.js route handler, which forwards
-  // the caller's credentials to the secured backend. Deliberately not retried:
-  // each successful call issues a new, independent attempt reference.
+  const headers: Record<string, string> = {};
+  if (accessToken) {
+    headers['X-Order-Access-Token'] = accessToken;
+  }
+
+  // The request goes straight to the backend at API_BASE_URL, and it is not retried,
+  // because each successful call issues a new independent attempt reference.
   const { data } = await api.post<PaymentAttempt>(
-    '/api/payments/initialize',
+    '/payments/initialize',
     { orderId },
-    { baseURL: '' }
+    { headers, retry: false }
   );
   return data;
 }
 
-export async function getOrder(id: string): Promise<Order> {
+export async function getOrder(
+  id: string,
+  accessToken?: string | null
+): Promise<Order> {
   if (isMockApiEnabled()) return mockGetOrder(id);
 
-  const { data } = await api.get<Order>(`/orders/${encodeURIComponent(id)}`);
+  const headers: Record<string, string> = {};
+  if (accessToken) {
+    headers['X-Order-Access-Token'] = accessToken;
+  }
+
+  const { data } = await api.get<Order>(`/orders/${encodeURIComponent(id)}`, { headers });
   return data;
 }
 
@@ -312,18 +372,23 @@ export async function verifyPayment(reference: string): Promise<PaymentVerificat
 
 export async function verifyOrderPayment(
   reference: string,
-  orderId?: string
+  orderId?: string,
+  accessToken?: string | null
 ): Promise<PaymentVerification> {
   // In mock mode the order only ever exists in this browser's in-memory store,
   // so verification has to run client-side too. It is isolated from the real
-  // path, which always goes through the route handler to the backend.
+  // path, which goes straight to the backend; the backend checks the access
+  // token against the order for this reference.
   if (isMockApiEnabled()) return mockVerifyPayment(reference);
 
-  // `baseURL: ''` routes this through the Next.js route handler rather than the backend.
-  const { data } = await api.post<PaymentVerification>(
-    '/api/orders/verify-payment',
-    { reference, orderId },
-    { baseURL: '', retry: true }
+  const headers: Record<string, string> = {};
+  if (accessToken) {
+    headers['X-Order-Access-Token'] = accessToken;
+  }
+
+  const { data } = await api.get<PaymentVerification>(
+    `/payments/verify/${encodeURIComponent(reference)}`,
+    { retry: true, headers }
   );
   return data;
 }
@@ -350,6 +415,14 @@ export async function getOrderTracking(id: string): Promise<Order> {
   if (isMockApiEnabled()) return mockGetOrder(id);
 
   const { data } = await api.get<Order>(`/orders/${encodeURIComponent(id)}`, { retry: true });
+  return data;
+}
+
+export async function trackOrder(reference: string, phone: string): Promise<any> {
+  if (isMockApiEnabled()) return mockGetOrder(reference);
+
+  const params = new URLSearchParams({ reference, phone });
+  const { data } = await api.get<any>(`/orders/track?${params.toString()}`, { retry: true });
   return data;
 }
 

@@ -4,9 +4,13 @@ import Link from 'next/link';
 import { useCallback, useEffect, useState } from 'react';
 import { HiOutlineTruck } from 'react-icons/hi';
 import { useCartStore, useUserStore } from '@/store';
-import { ApiError, fetchProducts, getDeliveryZones, type DeliveryZone } from '@/services/api';
+import {
+  ApiError,
+  checkAvailability,
+  getDeliveryZones,
+  type DeliveryZone
+} from '@/services/api';
 import type { DeliveryInfo } from '@/types';
-import { AuthForm } from '@/components/auth/AuthForm';
 import { CartSummary } from '@/components/cart/CartSummary';
 import { DeliveryForm } from '@/components/checkout/DeliveryForm';
 import { PaymentForm } from '@/components/checkout/PaymentForm';
@@ -46,16 +50,17 @@ function CheckoutSkeleton() {
 
 export default function CheckoutPage() {
   const items = useCartStore((state) => state.items);
-  const syncSoldOutStatus = useCartStore((state) => state.syncSoldOutStatus);
+  const syncAvailability = useCartStore((state) => state.syncAvailability);
   const deliveryInfo = useUserStore((state) => state.deliveryInfo);
   const updateDeliveryInfo = useUserStore((state) => state.updateDeliveryInfo);
   const user = useUserStore((state) => state.user);
   const sessionReady = useUserStore((state) => state.sessionReady);
 
   const [currentStep, setCurrentStep] = useState<CheckoutStep>('delivery');
-  const [authMode, setAuthMode] = useState<'login' | 'register'>('login');
   const [zones, setZones] = useState<DeliveryZone[] | null>(null);
   const [zonesError, setZonesError] = useState<string | null>(null);
+  const [availabilityError, setAvailabilityError] = useState<string | null>(null);
+  const [expiredNotice, setExpiredNotice] = useState(false);
 
   const loadZones = useCallback(async () => {
     setZonesError(null);
@@ -70,24 +75,50 @@ export default function CheckoutPage() {
     void loadZones();
   }, [loadZones]);
 
-  // The cart is persisted, so a product can sell out after it was added. Ask
-  // the server which products are sold out and flag those cart items. Nothing
-  // is removed from the cart here.
+  // Read-only stock and price probe. It never removes a line and never changes
+  // a quantity: it only records each line's status and the server unit price.
+  // The same probe is run before every payment attempt, because POST /orders
+  // is the authority and the reservation may have expired.
+  const refreshAvailability = useCallback(async (): Promise<boolean> => {
+    const currentItems = useCartStore.getState().items;
+    if (currentItems.length === 0) return true;
+
+    try {
+      const results = await checkAvailability(
+        currentItems.map((item) => ({
+          productId: item.productId,
+          color: item.color ?? '',
+          quantity: item.quantity
+        }))
+      );
+      syncAvailability(results);
+      setAvailabilityError(null);
+      return results.every((line) => line.status === 'ok');
+    } catch (caught) {
+      setAvailabilityError(ApiError.from(caught).message);
+      return false;
+    }
+  }, [syncAvailability]);
+
   useEffect(() => {
-    let cancelled = false;
+    void refreshAvailability();
+  }, [refreshAvailability]);
 
-    fetchProducts()
-      .then((products) => {
-        if (!cancelled) syncSoldOutStatus(products);
-      })
-      .catch(() => {
-        // A failed lookup leaves the stored flags untouched.
-      });
-
-    return () => {
-      cancelled = true;
+  useEffect(() => {
+    const onFocus = () => {
+      void refreshAvailability();
     };
-  }, [syncSoldOutStatus]);
+
+    window.addEventListener('focus', onFocus);
+    return () => {
+      window.removeEventListener('focus', onFocus);
+    };
+  }, [refreshAvailability]);
+
+  const handleReservationExpired = useCallback(async () => {
+    setExpiredNotice(true);
+    await refreshAvailability();
+  }, [refreshAvailability]);
 
   // Pre-fill the checkout draft from the signed-in account without overwriting
   // anything the visitor already typed.
@@ -123,42 +154,6 @@ export default function CheckoutPage() {
     );
   }
 
-  // Checkout needs an account, so rather than bouncing to /login we show the
-  // sign-in or create-account step inline and keep the cart and progress.
-  if (!user) {
-    return (
-      <div className="mx-auto w-full max-w-7xl px-4 py-8 sm:px-6">
-        <header className="mb-6">
-          <h1 className="text-2xl font-bold text-ink sm:text-3xl">Checkout</h1>
-          <p className="mt-2 text-sm text-stone-500">
-            Sign in or create an account to finish your order. Your cart is saved.
-          </p>
-        </header>
-
-        <div className="grid gap-6 lg:grid-cols-[minmax(0,1fr)_22rem]">
-          <AuthForm
-            mode={authMode}
-            onSuccess={() => undefined}
-            onSwitchMode={() =>
-              setAuthMode((current) => (current === 'login' ? 'register' : 'login'))
-            }
-          />
-          <div className="lg:sticky lg:top-24 lg:self-start">
-            {zones ? (
-              <CartSummary zones={zones} />
-            ) : (
-              <div className="card h-40 p-6">
-                <div className="skeleton h-5 w-32" />
-                <div className="skeleton mt-4 h-4 w-full" />
-                <div className="skeleton mt-3 h-4 w-full" />
-              </div>
-            )}
-          </div>
-        </div>
-      </div>
-    );
-  }
-
   if (zonesError || zones === null) {
     return (
       <div className="mx-auto w-full max-w-3xl px-4 py-16 text-center sm:px-6">
@@ -173,7 +168,6 @@ export default function CheckoutPage() {
 
   const currentIndex = STEPS.findIndex((entry) => entry.value === currentStep);
   const isProcessing = currentStep === 'processing';
-  const hasSoldOutItems = items.some((item) => item.soldOut);
 
   return (
     <div className="mx-auto w-full max-w-7xl px-4 py-8 sm:px-6">
@@ -199,61 +193,65 @@ export default function CheckoutPage() {
 
       <div className="grid gap-6 lg:grid-cols-[minmax(0,1fr)_22rem]">
         <div>
-          {hasSoldOutItems ? (
-            <div role="alert" className="alert-error flex flex-col items-start gap-2">
-              <p className="font-semibold text-ink">Your cart holds a sold out item</p>
-              <p className="text-sm">
-                Checkout is blocked until it is removed. The item stays in your cart so nothing
-                is taken away from you without you knowing.
-              </p>
+          {expiredNotice && (
+            <div role="status" className="card mb-4 p-4 text-sm text-ink">
+              Your reservation expired. We have checked stock again.
             </div>
-          ) : (
-            <ErrorBoundary title="Checkout failed to load">
-              {currentStep === 'delivery' && (
-                <DeliveryForm zones={zones} onComplete={() => setCurrentStep('payment')} />
-              )}
-
-              {(currentStep === 'payment' || isProcessing) && (
-                <>
-                  {isProcessing && (
-                    <div
-                      className="card mb-4 flex flex-col items-start gap-2 p-4"
-                      aria-live="polite"
-                      role="status"
-                    >
-                      <p className="flex items-center gap-2 text-sm font-medium text-ink">
-                        <HiOutlineTruck className="h-4 w-4 text-dark-gold" aria-hidden="true" />
-                        Processing your order
-                      </p>
-                      <p className="text-xs text-stone-500">
-                        Hold on while we confirm your payment. This usually takes a few seconds.
-                      </p>
-                      <div className="skeleton h-1.5 w-full" />
-                    </div>
-                  )}
-
-                  {!isProcessing && (
-                    <button
-                      type="button"
-                      onClick={() => setCurrentStep('delivery')}
-                      disabled={isProcessing}
-                      className="btn btn-ghost mb-4 text-sm"
-                    >
-                      Back to delivery details
-                    </button>
-                  )}
-
-                  <PaymentForm
-                    zones={zones}
-                    deliveryInfo={deliveryInfo}
-                    onProcessingChange={(processing) =>
-                      setCurrentStep(processing ? 'processing' : 'payment')
-                    }
-                  />
-                </>
-              )}
-            </ErrorBoundary>
           )}
+
+          {availabilityError && (
+            <div role="alert" className="alert-error mb-4">
+              {availabilityError}
+            </div>
+          )}
+
+          <ErrorBoundary title="Checkout failed to load">
+            {currentStep === 'delivery' && (
+              <DeliveryForm zones={zones} onComplete={() => setCurrentStep('payment')} />
+            )}
+
+            {(currentStep === 'payment' || isProcessing) && (
+              <>
+                {isProcessing && (
+                  <div
+                    className="card mb-4 flex flex-col items-start gap-2 p-4"
+                    aria-live="polite"
+                    role="status"
+                  >
+                    <p className="flex items-center gap-2 text-sm font-medium text-ink">
+                      <HiOutlineTruck className="h-4 w-4 text-dark-gold" aria-hidden="true" />
+                      Processing your order
+                    </p>
+                    <p className="text-xs text-stone-500">
+                      Hold on while we confirm your payment. This usually takes a few seconds.
+                    </p>
+                    <div className="skeleton h-1.5 w-full" />
+                  </div>
+                )}
+
+                {!isProcessing && (
+                  <button
+                    type="button"
+                    onClick={() => setCurrentStep('delivery')}
+                    disabled={isProcessing}
+                    className="btn btn-ghost mb-4 text-sm"
+                  >
+                    Back to delivery details
+                  </button>
+                )}
+
+                <PaymentForm
+                  zones={zones}
+                  deliveryInfo={deliveryInfo}
+                  onBeforePay={refreshAvailability}
+                  onReservationExpired={handleReservationExpired}
+                  onProcessingChange={(processing) =>
+                    setCurrentStep(processing ? 'processing' : 'payment')
+                  }
+                />
+              </>
+            )}
+          </ErrorBoundary>
         </div>
 
         <div className="lg:sticky lg:top-24 lg:self-start">
