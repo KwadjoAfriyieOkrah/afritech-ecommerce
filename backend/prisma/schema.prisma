@@ -136,6 +136,7 @@ model Order {
   paidAt          DateTime?
   riderId         String?
   reservedUntil   DateTime?         // set on creation; null once paid or released
+  deliveredAt     DateTime?
   idempotencyKey  String?           @unique // client-generated per checkout attempt
   createdAt       DateTime          @default(now())
   updatedAt       DateTime          @updatedAt
