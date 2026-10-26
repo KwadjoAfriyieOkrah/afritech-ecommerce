@@ -8,7 +8,8 @@ import { useCartStore, useUserStore } from '@/store';
 const NAV_LINKS = [
   { href: '/', label: 'Home' },
   { href: '/products', label: 'Products' },
-  { href: '/checkout', label: 'Checkout' }
+  { href: '/checkout', label: 'Checkout' },
+  { href: '/track', label: 'Track Order' }
 ];
 
 export function Header() {
