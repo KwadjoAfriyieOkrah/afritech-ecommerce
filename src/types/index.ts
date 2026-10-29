@@ -69,6 +69,7 @@ export interface User {
   email: string;
   phone: string;
   name: string;
+  role?: 'CUSTOMER' | 'ADMIN' | 'DELIVERY';
   address?: string;
   location?: string;
 }

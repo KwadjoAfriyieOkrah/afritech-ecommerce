@@ -35,6 +35,7 @@ export interface PublicUser {
   email: string;
   phone: string;
   name: string;
+  role: Role;
 }
 
 export interface AuthResult {
@@ -59,6 +60,7 @@ interface UserRecord {
   email: string;
   phone: string | null;
   name: string;
+  role: Role;
 }
 
 interface AuthTokenPayload {
@@ -76,6 +78,7 @@ export function publicUser(user: UserRecord): PublicUser {
     email: user.email,
     phone: user.phone ?? "",
     name: user.name,
+    role: user.role,
   };
 }
 
@@ -166,7 +169,7 @@ export async function login(input: LoginInput): Promise<AuthResult> {
 export async function getCurrentUser(userId: string): Promise<PublicUser | null> {
   const user = await prisma.user.findUnique({
     where: { id: userId },
-    select: { id: true, email: true, phone: true, name: true },
+    select: { id: true, email: true, phone: true, name: true, role: true },
   });
 
   return user ? publicUser(user) : null;

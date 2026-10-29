@@ -72,6 +72,7 @@ function injectAuthUser(req: Request, _res: Response, next: NextFunction): void 
     email: "probe@test.local",
     phone: "",
     name: "Role Probe",
+    role: Role.CUSTOMER,
   };
   next();
 }
