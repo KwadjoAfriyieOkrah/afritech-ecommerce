@@ -115,7 +115,7 @@ function OrderRow({ order }: { order: Order }) {
         <span className="text-sm font-semibold text-ink">{formatCedis(order.totalPrice)}</span>
 
         <div className="flex gap-2">
-          <Link href={`/tracking/${order.id}`} className="btn btn-outline px-3 py-1.5 text-xs">
+          <Link href={`/track?reference=${encodeURIComponent(order.reference)}`} className="btn btn-outline px-3 py-1.5 text-xs">
             Track order
           </Link>
           <Link href={`/confirmation/${order.id}`} className="btn btn-ghost px-2 py-1.5 text-xs">
@@ -167,7 +167,7 @@ export default function AccountPage() {
     const email = user ? user.email.trim().toLowerCase() : '';
     const isOwn = (order: Order) =>
       user !== null &&
-      (order.userId === user.id || order.customerEmail.trim().toLowerCase() === email);
+      (order.userId === user.id || order.customerEmail?.trim().toLowerCase() === email);
 
     const byId = new Map<string, Order>();
 

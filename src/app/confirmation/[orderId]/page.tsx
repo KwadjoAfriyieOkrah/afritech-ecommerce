@@ -262,7 +262,7 @@ export default function ConfirmationPage() {
           )}
 
           <div className="flex flex-col gap-3 sm:flex-row sm:justify-center">
-            <Link href={`/tracking/${order.id}`} className="btn btn-primary w-full sm:w-auto">
+            <Link href={`/track?reference=${encodeURIComponent(order.reference)}`} className="btn btn-primary w-full sm:w-auto">
               Track Order
             </Link>
             <Link href="/products" className="btn btn-outline w-full sm:w-auto">

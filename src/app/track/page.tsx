@@ -1,12 +1,15 @@
 'use client';
 
-import { useState } from 'react';
-import { trackOrder } from '@/services/api';
+import { Suspense, useState } from 'react';
+import { useSearchParams } from 'next/navigation';
+import { trackOrder, type TrackOrderResponse } from '@/services/api';
+import type { OrderItem } from '@/types';
 
-export default function TrackPage() {
-  const [reference, setReference] = useState('');
+function TrackPageContent() {
+  const searchParams = useSearchParams();
+  const [reference, setReference] = useState(searchParams.get('reference') ?? '');
   const [phone, setPhone] = useState('');
-  const [result, setResult] = useState<any>(null);
+  const [result, setResult] = useState<TrackOrderResponse | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
 
@@ -18,7 +21,7 @@ export default function TrackPage() {
     try {
       const data = await trackOrder(reference, phone);
       setResult(data);
-    } catch (err: any) {
+    } catch {
       setError('We couldn\'t find an order with those details. Check the reference and phone number.');
     } finally {
       setLoading(false);
@@ -75,7 +78,7 @@ export default function TrackPage() {
           <div>
             <h3 className="font-medium text-ink">Items</h3>
             <ul className="mt-2 flex flex-col gap-2">
-              {result.items?.map((item: any, idx: number) => (
+              {result.items?.map((item: OrderItem, idx: number) => (
                 <li key={idx} className="flex justify-between text-sm">
                   <span>
                     {item.quantity} x {item.name} {item.color ? `(${item.color})` : ''}
@@ -111,5 +114,13 @@ export default function TrackPage() {
         </div>
       )}
     </div>
+  );
+}
+
+export default function TrackPage() {
+  return (
+    <Suspense fallback={<div className="mx-auto w-full max-w-3xl px-4 py-8 sm:px-6" />}>
+      <TrackPageContent />
+    </Suspense>
   );
 }
