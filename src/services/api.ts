@@ -4,11 +4,14 @@ import type {
   AuthResponse,
   CreateOrderRequestBody,
   Order,
+  OrderItem,
+  OrderStatus,
   PaymentAttempt,
   PaymentVerification,
   Product,
   ProductFilters,
   RegisterPayload,
+  RiderInfo,
   User
 } from '@/types';
 import { useUserStore } from '@/store/userStore';
@@ -418,11 +421,26 @@ export async function getOrderTracking(id: string): Promise<Order> {
   return data;
 }
 
-export async function trackOrder(reference: string, phone: string): Promise<any> {
+export interface TrackOrderResponse {
+  reference: string;
+  status: OrderStatus;
+  items: OrderItem[];
+  total?: number;
+  deliveryFee: number;
+  expectedDeliveryDate: string;
+  rider?: RiderInfo | null;
+}
+
+export async function trackOrder(
+  reference: string,
+  phone: string
+): Promise<TrackOrderResponse> {
   if (isMockApiEnabled()) return mockGetOrder(reference);
 
   const params = new URLSearchParams({ reference, phone });
-  const { data } = await api.get<any>(`/orders/track?${params.toString()}`, { retry: true });
+  const { data } = await api.get<TrackOrderResponse>(`/orders/track?${params.toString()}`, {
+    retry: true
+  });
   return data;
 }
 

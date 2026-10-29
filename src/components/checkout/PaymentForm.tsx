@@ -51,7 +51,6 @@ export function PaymentForm({
   const setCurrentOrder = useOrderStore((state) => state.setCurrentOrder);
   const addToHistory = useOrderStore((state) => state.addToHistory);
   const updateStatus = useOrderStore((state) => state.updateStatus);
-  const loggedInEmail = useUserStore((state) => state.user?.email);
   const userId = useUserStore((state) => state.user?.id);
 
   const [phase, setPhase] = useState<'idle' | 'creating' | 'paying' | 'verifying'>('idle');
@@ -68,7 +67,6 @@ export function PaymentForm({
     [onProcessingChange]
   );
 
-  const email = deliveryInfo.customerEmail || loggedInEmail || '';
   const keyReady = isUsableKey(PAYSTACK_PUBLIC_KEY);
 
   const subtotal = useMemo(
@@ -213,7 +211,7 @@ export function PaymentForm({
       }
 
       // Handle access token
-      const accessToken = (response as any).accessToken;
+      const accessToken = response.accessToken;
       if (accessToken) {
         try {
           if (typeof window !== 'undefined') {
@@ -338,11 +336,11 @@ export function PaymentForm({
     }
   }, [
     phase,
-    items,
     deliveryInfo,
-    email,
     userId,
     deliveryAvailable,
+    onBeforePay,
+    onReservationExpired,
     setCurrentOrder,
     addToHistory,
     handlePaymentSuccess,
@@ -471,7 +469,7 @@ export function PaymentForm({
         <div className="rounded-lg border border-yellow-300 bg-yellow-50 px-4 py-3 text-sm text-yellow-900">
           <p className="font-semibold">How payment works</p>
           <p className="mt-1">
-            Enter your name, phone number and delivery details, then tap Place Order. You'll be taken to Paystack's secure payment page. Choose Mobile Money, enter your number, and approve the payment with your MoMo PIN when the prompt appears on your phone. You may first be asked for a code sent to your phone. Your order is confirmed when payment goes through. Your item is reserved for 15 minutes.
+            Enter your name, phone number and delivery details, then tap Place Order. You&apos;ll be taken to Paystack&apos;s secure payment page. Choose Mobile Money, enter your number, and approve the payment with your MoMo PIN when the prompt appears on your phone. You may first be asked for a code sent to your phone. Your order is confirmed when payment goes through. Your item is reserved for 15 minutes.
           </p>
           <p className="mt-2">
             Keep your order reference. Track your order any time under Track Order, using your reference and phone number.
