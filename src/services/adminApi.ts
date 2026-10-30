@@ -51,6 +51,39 @@ export interface AdminMutationResult {
   status: string;
 }
 
+export type AdminProductCategory = 'IPHONE' | 'SAMSUNG' | 'LAPTOP';
+
+export type ProductSpecs = Record<string, string>;
+
+export interface AdminProductColor {
+  id: string;
+  name: string;
+  stock: number;
+}
+
+export interface AdminProduct {
+  id: string;
+  name: string;
+  brand: string;
+  category: AdminProductCategory;
+  description: string | null;
+  specs: ProductSpecs | null;
+  basePrice: string;
+  isActive: boolean;
+  images: string[];
+  colors: AdminProductColor[];
+}
+
+export interface AdminProductInput {
+  name: string;
+  brand: string;
+  category: AdminProductCategory;
+  description: string;
+  basePrice: string;
+  isActive: boolean;
+  specs: ProductSpecs | null;
+}
+
 async function unwrap<T>(request: () => Promise<AxiosResponse<T>>): Promise<T> {
   try {
     const { data } = await request();
@@ -122,6 +155,31 @@ export async function deliverOrder(orderId: string): Promise<AdminMutationResult
     api.post<AdminMutationResult>(
       `/admin/orders/${encodeURIComponent(orderId)}/delivered`,
       undefined,
+      { retry: false }
+    )
+  );
+}
+
+export async function listAdminProducts(): Promise<AdminProduct[]> {
+  return unwrap(() => api.get<AdminProduct[]>('/admin/products'));
+}
+
+export async function createAdminProduct(
+  input: AdminProductInput
+): Promise<AdminProduct> {
+  return unwrap(() =>
+    api.post<AdminProduct>('/admin/products', input, { retry: false })
+  );
+}
+
+export async function updateAdminProduct(
+  id: string,
+  input: AdminProductInput
+): Promise<AdminProduct> {
+  return unwrap(() =>
+    api.patch<AdminProduct>(
+      `/admin/products/${encodeURIComponent(id)}`,
+      input,
       { retry: false }
     )
   );
