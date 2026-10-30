@@ -60,6 +60,102 @@ const basePriceSchema = z
     "Price must be greater than 0",
   );
 
+const iphoneStorageSchema = z.enum(["128GB", "256GB", "512GB", "1TB"]);
+const laptopStorageSchema = z.enum(["256GB", "512GB", "1TB", "2TB"]);
+const samsungRamSchema = z.enum(["4GB", "6GB", "8GB", "12GB", "16GB"]);
+const laptopRamSchema = z.enum([
+  "4GB",
+  "8GB",
+  "12GB",
+  "16GB",
+  "24GB",
+  "32GB",
+  "64GB",
+]);
+
+function specText(maxLength: number): z.ZodString {
+  return z
+    .string()
+    .trim()
+    .min(1, "This field is required")
+    .max(maxLength, `Must be at most ${maxLength} characters`);
+}
+
+const iphoneSpecsSchema = z
+  .object({
+    storage: iphoneStorageSchema,
+    colour: specText(40),
+    chip: specText(60),
+    camera: specText(120),
+    screenSize: specText(20),
+    battery: specText(60),
+  })
+  .strict();
+
+const samsungSpecsSchema = z
+  .object({
+    storage: iphoneStorageSchema,
+    colour: specText(40),
+    ram: samsungRamSchema,
+    camera: specText(120),
+    screenSize: specText(20),
+    battery: specText(60),
+  })
+  .strict();
+
+const laptopSpecsSchema = z
+  .object({
+    processor: specText(80),
+    ram: laptopRamSchema,
+    storage: laptopStorageSchema,
+    screenSize: specText(20),
+    graphics: specText(80),
+    batteryLife: specText(40),
+  })
+  .strict();
+
+export type ProductSpecs =
+  | z.infer<typeof iphoneSpecsSchema>
+  | z.infer<typeof samsungSpecsSchema>
+  | z.infer<typeof laptopSpecsSchema>;
+
+export type SpecValidationResult =
+  | { success: true; data: ProductSpecs | null }
+  | { success: false; field: string; message: string };
+
+const SPEC_SCHEMAS: Record<ProductCategory, z.ZodType<ProductSpecs>> = {
+  [ProductCategory.IPHONE]: iphoneSpecsSchema,
+  [ProductCategory.SAMSUNG]: samsungSpecsSchema,
+  [ProductCategory.LAPTOP]: laptopSpecsSchema,
+};
+
+export function validateSpecs(
+  category: ProductCategory,
+  specs: unknown,
+): SpecValidationResult {
+  if (specs === null) {
+    return { success: true, data: null };
+  }
+
+  const parsed = SPEC_SCHEMAS[category].safeParse(specs);
+  if (!parsed.success) {
+    const issue = parsed.error.issues[0];
+    let field = "specs";
+    if (issue?.code === "unrecognized_keys" && issue.keys.length > 0) {
+      field = issue.keys[0] ?? "specs";
+    } else if (issue && issue.path.length > 0) {
+      field = issue.path.map(String).join(".");
+    }
+    return {
+      success: false,
+      field,
+      message: issue?.message ?? "Invalid specs",
+    };
+  }
+
+  return { success: true, data: parsed.data };
+}
+
 const isActiveSchema = z.union([
   z.boolean(),
   z
@@ -173,7 +269,11 @@ const productFields = {
 
 // One field set drives both the single-product routes and every bulk row, so
 // a row can never be accepted under weaker rules than a single write.
-export const productInputSchema = z.object(productFields);
+export const productInputSchema = z.object({
+  ...productFields,
+  colors: colorsSchema.optional(),
+  specs: z.unknown().optional(),
+});
 
 export const bulkProductRowSchema = z.object({
   id: productIdSchema.optional(),
@@ -191,6 +291,7 @@ export const productPatchSchema = z
     basePrice: basePriceSchema.optional(),
     isActive: isActiveSchema.optional(),
     colors: colorsSchema.optional(),
+    specs: z.unknown().optional(),
   })
   .superRefine((value, ctx) => {
     if (Object.keys(value).length === 0) {

@@ -6,6 +6,7 @@ import {
   CsvParseError,
   ImageLimitError,
   ProductNotFoundError,
+  SpecValidationError,
   StockConflictError,
   UnsupportedImageError,
   addProductImage,
@@ -234,6 +235,10 @@ export async function createProductHandler(
     const product = await createProduct(parsed.data, user.id);
     res.status(201).json(product);
   } catch (error) {
+    if (error instanceof SpecValidationError) {
+      res.status(400).json({ error: `${error.field}: ${error.message}` });
+      return;
+    }
     if (error instanceof ProductNotFoundError) {
       res.status(404).json(PRODUCT_NOT_FOUND_BODY);
       return;
@@ -269,6 +274,10 @@ export async function updateProductHandler(
     const product = await updateProduct(idResult.data, parsed.data, user.id);
     res.status(200).json(product);
   } catch (error) {
+    if (error instanceof SpecValidationError) {
+      res.status(400).json({ error: `${error.field}: ${error.message}` });
+      return;
+    }
     if (error instanceof ProductNotFoundError) {
       res.status(404).json(PRODUCT_NOT_FOUND_BODY);
       return;

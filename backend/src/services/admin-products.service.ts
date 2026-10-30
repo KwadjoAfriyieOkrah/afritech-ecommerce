@@ -7,6 +7,7 @@ import {
   MAX_PRODUCT_IMAGES,
   bulkProductRowSchema,
   toProductValidationDetails,
+  validateSpecs,
   type BulkProductRow,
   type ProductInput,
   type ProductPatch,
@@ -32,6 +33,15 @@ export class ProductNotFoundError extends Error {}
 export class ImageLimitError extends Error {}
 export class CsvParseError extends Error {}
 export class StockConflictError extends Error {}
+
+export class SpecValidationError extends Error {
+  readonly field: string;
+
+  constructor(field: string, message: string) {
+    super(message);
+    this.field = field;
+  }
+}
 
 export class BulkRowError extends Error {
   readonly row: number;
@@ -539,6 +549,7 @@ export interface AdminProduct {
   brand: string;
   category: ProductCategory;
   description: string | null;
+  specs: Prisma.JsonValue | null;
   basePrice: string;
   isActive: boolean;
   images: string[];
@@ -551,6 +562,7 @@ const ADMIN_PRODUCT_SELECT = {
   brand: true,
   category: true,
   description: true,
+  specs: true,
   basePrice: true,
   isActive: true,
   images: true,
@@ -574,6 +586,7 @@ function toAdminProduct(product: AdminProductRecord): AdminProduct {
     brand: product.brand,
     category: product.category,
     description: product.description,
+    specs: product.specs,
     basePrice: product.basePrice.toString(),
     isActive: product.isActive,
     images: product.images,
@@ -589,10 +602,23 @@ export async function listAllProducts(): Promise<AdminProduct[]> {
   return products.map((product) => toAdminProduct(product));
 }
 
+function validatedSpecs(category: ProductCategory, specs: unknown) {
+  const result = validateSpecs(category, specs);
+  if (!result.success) {
+    throw new SpecValidationError(result.field, result.message);
+  }
+  return result.data === null ? Prisma.DbNull : result.data;
+}
+
 export async function createProduct(
   input: ProductInput,
   adminId: string,
 ): Promise<AdminProduct> {
+  const specs =
+    input.specs === undefined
+      ? undefined
+      : validatedSpecs(input.category, input.specs);
+
   return prisma.$transaction(async (tx) => {
     const product = await tx.product.create({
       data: {
@@ -603,12 +629,17 @@ export async function createProduct(
         basePrice: new Prisma.Decimal(input.basePrice),
         isActive: input.isActive ?? true,
         images: [],
-        colors: {
-          create: input.colors.map((color) => ({
-            name: color.name,
-            stock: color.stock,
-          })),
-        },
+        ...(specs !== undefined ? { specs } : {}),
+        ...(input.colors !== undefined
+          ? {
+              colors: {
+                create: input.colors.map((color) => ({
+                  name: color.name,
+                  stock: color.stock,
+                })),
+              },
+            }
+          : {}),
       },
       select: ADMIN_PRODUCT_SELECT,
     });
@@ -666,6 +697,22 @@ export async function updateProduct(
       throw new ProductNotFoundError();
     }
 
+    const nextCategory = patch.category ?? current.category;
+    const categoryChanged =
+      patch.category !== undefined && patch.category !== current.category;
+
+    if (categoryChanged && patch.specs === undefined) {
+      throw new SpecValidationError(
+        "specs",
+        "Specs must be supplied when changing category",
+      );
+    }
+
+    const nextSpecs =
+      patch.specs !== undefined
+        ? validatedSpecs(nextCategory, patch.specs)
+        : undefined;
+
     const data: Prisma.ProductUpdateInput = {};
     const before: ChangeMeta = {};
     const after: ChangeMeta = {};
@@ -705,6 +752,9 @@ export async function updateProduct(
         before.basePrice = current.basePrice.toString();
         after.basePrice = nextPrice.toString();
       }
+    }
+    if (nextSpecs !== undefined) {
+      data.specs = nextSpecs;
     }
 
     const beforeColors: { name: string; stock: number }[] = current.colors.map(

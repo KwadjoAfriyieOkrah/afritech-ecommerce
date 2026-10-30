@@ -644,3 +644,232 @@ test("o. POST /admin/products/bulk dry run returns 200 and writes nothing", asyn
   const stored = await prisma.product.findFirst({ where: { name } });
   assert.equal(stored, null, "dry run must not write any product");
 });
+
+// ---------------------------------------------------------------------------
+test("q. POST /admin/products stores validated iPhone specs exactly as sent", async () => {
+  const specs = {
+    storage: "256GB",
+    colour: "Deep Purple",
+    chip: "A17 Pro",
+    camera: "48MP wide",
+    screenSize: "6.1 inch",
+    battery: "Up to 23 hours",
+  };
+
+  const created = await createProductOverHttp(uniqueName("iPhone Specs"), {
+    specs,
+  });
+  assert.equal(created.status, 201);
+  assert.deepEqual(field(created.body, "specs"), specs);
+
+  const id = stringField(created.body, "id");
+  assert.ok(id !== null);
+  const stored = await prisma.product.findUnique({
+    where: { id },
+    select: { specs: true },
+  });
+  assert.deepEqual(stored?.specs, specs);
+});
+
+// ---------------------------------------------------------------------------
+test("r. POST /admin/products with an iPhone RAM field returns 400 naming ram", async () => {
+  const result = await createProductOverHttp(uniqueName("iPhone RAM"), {
+    specs: {
+      storage: "128GB",
+      colour: "Black",
+      chip: "A16",
+      camera: "12MP",
+      screenSize: "6.1 inch",
+      battery: "Up to 20 hours",
+      ram: "8GB",
+    },
+  });
+  assert.equal(result.status, 400);
+  const message = stringField(result.body, "error");
+  assert.ok(message !== null, "400 body must carry an error message");
+  assert.ok(message.startsWith("ram"), `unexpected message: ${message}`);
+});
+
+// ---------------------------------------------------------------------------
+test("s. POST /admin/products with a laptop missing processor returns 400 naming processor", async () => {
+  const result = await createProductOverHttp(uniqueName("Laptop No Processor"), {
+    category: "LAPTOP",
+    specs: {
+      ram: "16GB",
+      storage: "1TB",
+      screenSize: "14 inch",
+      graphics: "Integrated",
+      batteryLife: "Up to 12 hours",
+    },
+  });
+  assert.equal(result.status, 400);
+  const message = stringField(result.body, "error");
+  assert.ok(message !== null, "400 body must carry an error message");
+  assert.ok(
+    message.startsWith("processor"),
+    `unexpected message: ${message}`,
+  );
+});
+
+// ---------------------------------------------------------------------------
+test("t. POST /admin/products with a Samsung storage of 64GB returns 400", async () => {
+  const result = await createProductOverHttp(uniqueName("Samsung 64GB"), {
+    category: "SAMSUNG",
+    specs: {
+      storage: "64GB",
+      colour: "Phantom Black",
+      ram: "8GB",
+      camera: "50MP",
+      screenSize: "6.2 inch",
+      battery: "5000mAh",
+    },
+  });
+  assert.equal(result.status, 400);
+  const message = stringField(result.body, "error");
+  assert.ok(message !== null, "400 body must carry an error message");
+  assert.ok(message.startsWith("storage"), `unexpected message: ${message}`);
+});
+
+// ---------------------------------------------------------------------------
+test("u. PATCH changing category without specs returns 400 and changes nothing", async () => {
+  const specs = {
+    storage: "128GB",
+    colour: "Blue",
+    chip: "A15",
+    camera: "12MP",
+    screenSize: "6.1 inch",
+    battery: "Up to 19 hours",
+  };
+  const created = await createProductOverHttp(uniqueName("Category Change"), {
+    specs,
+  });
+  assert.equal(created.status, 201);
+  const id = stringField(created.body, "id");
+  assert.ok(id !== null);
+
+  const patched = await requestJson(
+    "PATCH",
+    `/admin/products/${id}`,
+    { category: "SAMSUNG" },
+    adminToken,
+  );
+  assert.equal(patched.status, 400);
+  const message = stringField(patched.body, "error");
+  assert.ok(message !== null, "400 body must carry an error message");
+  assert.ok(message.startsWith("specs"), `unexpected message: ${message}`);
+
+  const stored = await prisma.product.findUnique({
+    where: { id },
+    select: { category: true, specs: true },
+  });
+  assert.equal(stored?.category, "IPHONE");
+  assert.deepEqual(stored?.specs, specs);
+});
+
+// ---------------------------------------------------------------------------
+test("v. specs null is accepted only when explicitly sent", async () => {
+  const specs = {
+    storage: "512GB",
+    colour: "Titanium",
+    chip: "A17 Pro",
+    camera: "48MP",
+    screenSize: "6.7 inch",
+    battery: "Up to 29 hours",
+  };
+  const created = await createProductOverHttp(uniqueName("Null Specs"), {
+    specs,
+  });
+  assert.equal(created.status, 201);
+  const id = stringField(created.body, "id");
+  assert.ok(id !== null);
+
+  const renamed = await requestJson(
+    "PATCH",
+    `/admin/products/${id}`,
+    { name: uniqueName("Null Specs Renamed") },
+    adminToken,
+  );
+  assert.equal(renamed.status, 200);
+  assert.deepEqual(field(renamed.body, "specs"), specs);
+
+  const cleared = await requestJson(
+    "PATCH",
+    `/admin/products/${id}`,
+    { specs: null },
+    adminToken,
+  );
+  assert.equal(cleared.status, 200);
+  assert.equal(field(cleared.body, "specs"), null);
+
+  const explicitNull = await createProductOverHttp(
+    uniqueName("Explicit Null Specs"),
+    { specs: null },
+  );
+  assert.equal(explicitNull.status, 201);
+  assert.equal(field(explicitNull.body, "specs"), null);
+});
+
+// ---------------------------------------------------------------------------
+test("w. POST /admin/products accepts a laptop with RAM 64GB", async () => {
+  const specs = {
+    processor: "Intel Core i9",
+    ram: "64GB",
+    storage: "2TB",
+    screenSize: "16 inch",
+    graphics: "Dedicated",
+    batteryLife: "Up to 10 hours",
+  };
+
+  const created = await createProductOverHttp(uniqueName("Laptop 64GB"), {
+    category: "LAPTOP",
+    specs,
+  });
+  assert.equal(created.status, 201);
+  assert.deepEqual(field(created.body, "specs"), specs);
+
+  const id = stringField(created.body, "id");
+  assert.ok(id !== null);
+  const stored = await prisma.product.findUnique({
+    where: { id },
+    select: { specs: true },
+  });
+  assert.deepEqual(stored?.specs, specs);
+});
+
+// ---------------------------------------------------------------------------
+test("x. POST /admin/products with a Samsung RAM of 32GB returns 400 naming ram", async () => {
+  const result = await createProductOverHttp(uniqueName("Samsung 32GB RAM"), {
+    category: "SAMSUNG",
+    specs: {
+      storage: "128GB",
+      colour: "Phantom Black",
+      ram: "32GB",
+      camera: "50MP",
+      screenSize: "6.2 inch",
+      battery: "5000mAh",
+    },
+  });
+  assert.equal(result.status, 400);
+  const message = stringField(result.body, "error");
+  assert.ok(message !== null, "400 body must carry an error message");
+  assert.ok(message.startsWith("ram"), `unexpected message: ${message}`);
+});
+
+// ---------------------------------------------------------------------------
+test("y. POST /admin/products with a laptop RAM of 48GB returns 400 naming ram", async () => {
+  const result = await createProductOverHttp(uniqueName("Laptop 48GB RAM"), {
+    category: "LAPTOP",
+    specs: {
+      processor: "Intel Core i7",
+      ram: "48GB",
+      storage: "1TB",
+      screenSize: "14 inch",
+      graphics: "Integrated",
+      batteryLife: "Up to 12 hours",
+    },
+  });
+  assert.equal(result.status, 400);
+  const message = stringField(result.body, "error");
+  assert.ok(message !== null, "400 body must carry an error message");
+  assert.ok(message.startsWith("ram"), `unexpected message: ${message}`);
+});
