@@ -44,3 +44,4 @@ server.log
 server.err.log
 server.pid
 *.log
+Documents/
