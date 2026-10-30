@@ -125,12 +125,19 @@ export default function CheckoutPage() {
   useEffect(() => {
     if (!user) return;
 
+    const current = useUserStore.getState().deliveryInfo;
     const seed: Partial<DeliveryInfo> = {};
-    if (!deliveryInfo.customerName.trim()) seed.customerName = user.name;
-    if (!deliveryInfo.customerEmail.trim()) seed.customerEmail = user.email;
-    if (!deliveryInfo.customerPhone.trim()) seed.customerPhone = user.phone;
+    if (!current.customerName.trim() && user.name.trim()) {
+      seed.customerName = user.name;
+    }
+    if (!current.customerEmail.trim() && user.email.trim()) {
+      seed.customerEmail = user.email;
+    }
+    if (!current.customerPhone.trim() && user.phone.trim()) {
+      seed.customerPhone = user.phone;
+    }
     if (Object.keys(seed).length > 0) updateDeliveryInfo(seed);
-  }, [user, deliveryInfo, updateDeliveryInfo]);
+  }, [user, updateDeliveryInfo]);
 
   if (!sessionReady) return <CheckoutSkeleton />;
 
