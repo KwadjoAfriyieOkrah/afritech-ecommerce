@@ -11,8 +11,10 @@ import {
   UnsupportedImageError,
   addProductImage,
   createProduct,
+  getAdminSalesSummary,
   listAllProducts,
   parseProductCsv,
+  removeProductImage,
   restockColor,
   runBulkProductImport,
   updateProduct,
@@ -119,6 +121,49 @@ export async function addProductImageHandler(
   }
 }
 
+export async function removeProductImageHandler(
+  req: Request,
+  res: Response,
+): Promise<void> {
+  const user = req.authUser;
+  if (!user) {
+    res.status(401).json({ error: UNAUTHORIZED_MESSAGE });
+    return;
+  }
+
+  const idResult = productIdSchema.safeParse(req.params.id);
+  const rawIndex = req.params.index;
+  if (
+    !idResult.success ||
+    typeof rawIndex !== "string" ||
+    !/^\d+$/.test(rawIndex)
+  ) {
+    res.status(404).json(PRODUCT_NOT_FOUND_BODY);
+    return;
+  }
+  const index = Number(rawIndex);
+  if (!Number.isSafeInteger(index)) {
+    res.status(404).json(PRODUCT_NOT_FOUND_BODY);
+    return;
+  }
+
+  try {
+    const result = await removeProductImage({
+      productId: idResult.data,
+      index,
+      adminId: user.id,
+    });
+    res.status(200).json(result);
+  } catch (error) {
+    if (error instanceof ProductNotFoundError) {
+      res.status(404).json(PRODUCT_NOT_FOUND_BODY);
+      return;
+    }
+    console.error("Failed to remove product image:", error);
+    res.status(500).json({ error: "Could not remove the image" });
+  }
+}
+
 function bulkResponseBody(result: BulkImportResult): Record<string, unknown> {
   const body: Record<string, unknown> = {
     mode: result.mode,
@@ -212,6 +257,51 @@ export async function listAllProductsHandler(
   } catch (error) {
     console.error("Failed to list admin products:", error);
     res.status(500).json({ error: "Could not load products" });
+  }
+}
+
+const DEFAULT_SALES_DAYS = 30;
+const MAX_SALES_DAYS = 365;
+
+function readSalesDays(value: unknown): number | null {
+  let raw: unknown = value;
+  if (Array.isArray(raw)) {
+    raw = raw[0];
+  }
+  if (raw === undefined) return DEFAULT_SALES_DAYS;
+  if (typeof raw !== "string") return null;
+
+  const trimmed = raw.trim();
+  if (trimmed === "") return DEFAULT_SALES_DAYS;
+  if (!/^\d+$/.test(trimmed)) return null;
+
+  const parsed = Number(trimmed);
+  if (!Number.isSafeInteger(parsed) || parsed < 1) return null;
+  return parsed > MAX_SALES_DAYS ? MAX_SALES_DAYS : parsed;
+}
+
+export async function getSalesSummaryHandler(
+  req: Request,
+  res: Response,
+): Promise<void> {
+  const user = req.authUser;
+  if (!user) {
+    res.status(401).json({ error: UNAUTHORIZED_MESSAGE });
+    return;
+  }
+
+  const days = readSalesDays(req.query.days);
+  if (days === null) {
+    res.status(400).json({ error: "days must be a positive integer" });
+    return;
+  }
+
+  try {
+    const summary = await getAdminSalesSummary(days);
+    res.status(200).json(summary);
+  } catch (error) {
+    console.error("Failed to load sales summary:", error);
+    res.status(500).json({ error: "Could not load sales" });
   }
 }
 

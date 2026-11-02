@@ -658,6 +658,7 @@ test("q. POST /admin/products stores validated iPhone specs exactly as sent", as
 
   const created = await createProductOverHttp(uniqueName("iPhone Specs"), {
     specs,
+    colors: [{ name: "Deep Purple", stock: 1 }],
   });
   assert.equal(created.status, 201);
   assert.deepEqual(field(created.body, "specs"), specs);
@@ -694,7 +695,9 @@ test("r. POST /admin/products with an iPhone RAM field returns 400 naming ram", 
 test("s. POST /admin/products with a laptop missing processor returns 400 naming processor", async () => {
   const result = await createProductOverHttp(uniqueName("Laptop No Processor"), {
     category: "LAPTOP",
+    colors: [{ name: "Silver", stock: 1 }],
     specs: {
+      colour: "Silver",
       ram: "16GB",
       storage: "1TB",
       screenSize: "14 inch",
@@ -715,6 +718,7 @@ test("s. POST /admin/products with a laptop missing processor returns 400 naming
 test("t. POST /admin/products with a Samsung storage of 64GB returns 400", async () => {
   const result = await createProductOverHttp(uniqueName("Samsung 64GB"), {
     category: "SAMSUNG",
+    colors: [{ name: "Phantom Black", stock: 1 }],
     specs: {
       storage: "64GB",
       colour: "Phantom Black",
@@ -742,6 +746,7 @@ test("u. PATCH changing category without specs returns 400 and changes nothing",
   };
   const created = await createProductOverHttp(uniqueName("Category Change"), {
     specs,
+    colors: [{ name: "Blue", stock: 1 }],
   });
   assert.equal(created.status, 201);
   const id = stringField(created.body, "id");
@@ -778,6 +783,7 @@ test("v. specs null is accepted only when explicitly sent", async () => {
   };
   const created = await createProductOverHttp(uniqueName("Null Specs"), {
     specs,
+    colors: [{ name: "Titanium", stock: 1 }],
   });
   assert.equal(created.status, 201);
   const id = stringField(created.body, "id");
@@ -812,6 +818,7 @@ test("v. specs null is accepted only when explicitly sent", async () => {
 // ---------------------------------------------------------------------------
 test("w. POST /admin/products accepts a laptop with RAM 64GB", async () => {
   const specs = {
+    colour: "Silver",
     processor: "Intel Core i9",
     ram: "64GB",
     storage: "2TB",
@@ -823,6 +830,7 @@ test("w. POST /admin/products accepts a laptop with RAM 64GB", async () => {
   const created = await createProductOverHttp(uniqueName("Laptop 64GB"), {
     category: "LAPTOP",
     specs,
+    colors: [{ name: "Silver", stock: 1 }],
   });
   assert.equal(created.status, 201);
   assert.deepEqual(field(created.body, "specs"), specs);
@@ -840,6 +848,7 @@ test("w. POST /admin/products accepts a laptop with RAM 64GB", async () => {
 test("x. POST /admin/products with a Samsung RAM of 32GB returns 400 naming ram", async () => {
   const result = await createProductOverHttp(uniqueName("Samsung 32GB RAM"), {
     category: "SAMSUNG",
+    colors: [{ name: "Phantom Black", stock: 1 }],
     specs: {
       storage: "128GB",
       colour: "Phantom Black",
@@ -859,7 +868,9 @@ test("x. POST /admin/products with a Samsung RAM of 32GB returns 400 naming ram"
 test("y. POST /admin/products with a laptop RAM of 48GB returns 400 naming ram", async () => {
   const result = await createProductOverHttp(uniqueName("Laptop 48GB RAM"), {
     category: "LAPTOP",
+    colors: [{ name: "Silver", stock: 1 }],
     specs: {
+      colour: "Silver",
       processor: "Intel Core i7",
       ram: "48GB",
       storage: "1TB",
@@ -872,4 +883,69 @@ test("y. POST /admin/products with a laptop RAM of 48GB returns 400 naming ram",
   const message = stringField(result.body, "error");
   assert.ok(message !== null, "400 body must carry an error message");
   assert.ok(message.startsWith("ram"), `unexpected message: ${message}`);
+});
+
+// ---------------------------------------------------------------------------
+test("z1. POST /admin/products creates a laptop with a colour spec and stock 5", async () => {
+  const specs = {
+    colour: "Silver",
+    processor: "Intel Core i5",
+    ram: "16GB",
+    storage: "512GB",
+    screenSize: "14 inch",
+    graphics: "Integrated",
+    batteryLife: "Up to 12 hours",
+  };
+
+  const created = await createProductOverHttp(uniqueName("Laptop Colour"), {
+    category: "LAPTOP",
+    specs,
+    colors: [{ name: "Silver", stock: 5 }],
+  });
+  assert.equal(created.status, 201);
+  const id = stringField(created.body, "id");
+  assert.ok(id !== null);
+
+  const listed = await request("/admin/products", { method: "GET" }, adminToken);
+  assert.equal(listed.status, 200);
+  const match = arrayOf(listed.body).find(
+    (item) => stringField(item, "id") === id,
+  );
+  assert.ok(match !== undefined, "created laptop must appear in the admin list");
+  assert.equal(numberField(firstColor(match), "stock"), 5);
+});
+
+// ---------------------------------------------------------------------------
+test("z2. POST /admin/products with duplicate colour names returns 400 naming colors", async () => {
+  const result = await createProductOverHttp(uniqueName("Duplicate Names"), {
+    colors: [
+      { name: "Black", stock: 1 },
+      { name: "black", stock: 2 },
+    ],
+  });
+  assert.equal(result.status, 400);
+  const message = stringField(result.body, "error");
+  assert.ok(message !== null, "400 body must carry an error message");
+  assert.ok(message.startsWith("colors"), `unexpected message: ${message}`);
+});
+
+// ---------------------------------------------------------------------------
+test("z3. POST /admin/products with a laptop colour that differs from the spec returns 400 naming colors", async () => {
+  const result = await createProductOverHttp(uniqueName("Laptop Colour Mismatch"), {
+    category: "LAPTOP",
+    colors: [{ name: "Graphite", stock: 1 }],
+    specs: {
+      colour: "Silver",
+      processor: "Intel Core i5",
+      ram: "16GB",
+      storage: "512GB",
+      screenSize: "14 inch",
+      graphics: "Integrated",
+      batteryLife: "Up to 12 hours",
+    },
+  });
+  assert.equal(result.status, 400);
+  const message = stringField(result.body, "error");
+  assert.ok(message !== null, "400 body must carry an error message");
+  assert.ok(message.startsWith("colors"), `unexpected message: ${message}`);
 });

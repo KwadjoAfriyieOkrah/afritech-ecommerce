@@ -22,7 +22,9 @@ import {
   addProductImageHandler,
   bulkImportProductsHandler,
   createProductHandler,
+  getSalesSummaryHandler,
   listAllProductsHandler,
+  removeProductImageHandler,
   restockColorHandler,
   updateProductHandler,
 } from "../controllers/admin-products.controller";
@@ -125,9 +127,13 @@ router.post(
 
 router.get("/products", listAllProductsHandler);
 
+router.get("/sales", getSalesSummaryHandler);
+
 router.post("/products", createProductHandler);
 
 router.patch("/products/:id", updateProductHandler);
+
+router.delete("/products/:id/images/:index", removeProductImageHandler);
 
 router.post(
   "/products/:id/colors/:colorId/restock",

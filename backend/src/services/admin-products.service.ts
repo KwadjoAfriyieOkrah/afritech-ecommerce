@@ -15,6 +15,7 @@ import {
 } from "../validation/products.schemas";
 
 export const PRODUCT_IMAGE_ADD_ACTION = "PRODUCT_IMAGE_ADD";
+export const PRODUCT_IMAGE_REMOVE_ACTION = "PRODUCT_IMAGE_REMOVE";
 export const PRODUCT_BULK_CREATE_ACTION = "PRODUCT_BULK_CREATE";
 export const PRODUCT_BULK_UPDATE_ACTION = "PRODUCT_BULK_UPDATE";
 export const PRODUCT_CREATE_ACTION = "PRODUCT_CREATE";
@@ -167,6 +168,113 @@ export async function addProductImage(
       );
     }
     throw error;
+  }
+}
+
+export interface RemoveProductImageParams {
+  productId: string;
+  index: number;
+  adminId: string;
+}
+
+export interface RemoveProductImageResult {
+  images: string[];
+  strayAsset: boolean;
+}
+
+const CLOUDINARY_UPLOAD_SEGMENT = "/upload/";
+const CLOUDINARY_VERSION_PATTERN = /^v\d+$/;
+
+// Cloudinary stores no public id alongside the URL, so it is derived here:
+// everything after /upload/, minus the version segment and the extension.
+export function deriveCloudinaryPublicId(imageUrl: string): string | null {
+  const uploadIndex = imageUrl.indexOf(CLOUDINARY_UPLOAD_SEGMENT);
+  if (uploadIndex === -1) return null;
+
+  const path = imageUrl
+    .slice(uploadIndex + CLOUDINARY_UPLOAD_SEGMENT.length)
+    .split(/[?#]/)[0];
+  if (!path) return null;
+
+  const segments = path.split("/").filter((segment) => segment.length > 0);
+  const versionIndex = segments.findIndex((segment) =>
+    CLOUDINARY_VERSION_PATTERN.test(segment),
+  );
+  if (versionIndex !== -1) {
+    segments.splice(versionIndex, 1);
+  }
+  if (segments.length === 0) return null;
+
+  const lastIndex = segments.length - 1;
+  const filename = segments[lastIndex];
+  if (filename === undefined) return null;
+  const extensionIndex = filename.lastIndexOf(".");
+  if (extensionIndex > 0) {
+    segments[lastIndex] = filename.slice(0, extensionIndex);
+  }
+
+  const publicId = segments.join("/");
+  return publicId.length > 0 ? publicId : null;
+}
+
+export async function removeProductImage(
+  params: RemoveProductImageParams,
+): Promise<RemoveProductImageResult> {
+  const { productId, index, adminId } = params;
+
+  const { removedUrl, images } = await prisma.$transaction(async (tx) => {
+    const product = await tx.product.findUnique({
+      where: { id: productId },
+      select: { images: true },
+    });
+    if (!product || index < 0 || index >= product.images.length) {
+      throw new ProductNotFoundError();
+    }
+
+    const removed = product.images[index];
+    if (removed === undefined) {
+      throw new ProductNotFoundError();
+    }
+
+    const remaining = product.images.filter(
+      (_image, position) => position !== index,
+    );
+
+    await tx.product.update({
+      where: { id: productId },
+      data: { images: remaining },
+    });
+    await tx.adminLog.create({
+      data: {
+        adminId,
+        action: PRODUCT_IMAGE_REMOVE_ACTION,
+        entity: PRODUCT_ENTITY,
+        entityId: productId,
+        meta: { imageUrl: removed },
+      },
+    });
+
+    return { removedUrl: removed, images: remaining };
+  });
+
+  const publicId = deriveCloudinaryPublicId(removedUrl);
+  if (publicId === null) {
+    console.error(
+      "Could not derive a Cloudinary public id; a stray asset may remain:",
+      removedUrl,
+    );
+    return { images, strayAsset: true };
+  }
+
+  try {
+    await getCloudinaryClient().destroy(publicId);
+    return { images, strayAsset: false };
+  } catch (error) {
+    console.error(
+      "Failed to delete the product image asset; a stray asset may remain:",
+      error instanceof Error ? error.message : "unknown error",
+    );
+    return { images, strayAsset: true };
   }
 }
 
@@ -899,4 +1007,180 @@ export async function restockColor(
 
     return { productId, color: updated };
   });
+}
+
+export interface SalesTotals {
+  orders: number;
+  quantity: number;
+  amount: number;
+}
+
+export interface DailySalesRow extends SalesTotals {
+  date: string;
+}
+
+export interface TopProductSales {
+  productId: string;
+  name: string;
+  quantity: number;
+  amount: number;
+}
+
+export interface AdminSalesSummary {
+  totals: SalesTotals;
+  today: SalesTotals;
+  last7Days: SalesTotals;
+  last30Days: SalesTotals;
+  byDay: DailySalesRow[];
+  topProducts: TopProductSales[];
+}
+
+interface SalesAccumulator {
+  orderIds: Set<string>;
+  quantity: number;
+  amount: Prisma.Decimal;
+}
+
+interface ProductSalesAccumulator {
+  quantity: number;
+  amount: Prisma.Decimal;
+}
+
+function createSalesAccumulator(): SalesAccumulator {
+  return {
+    orderIds: new Set<string>(),
+    quantity: 0,
+    amount: new Prisma.Decimal(0),
+  };
+}
+
+function addSaleRow(
+  accumulator: SalesAccumulator,
+  row: { orderId: string; quantity: number; amount: Prisma.Decimal },
+): void {
+  accumulator.orderIds.add(row.orderId);
+  accumulator.quantity += row.quantity;
+  accumulator.amount = accumulator.amount.plus(row.amount);
+}
+
+function salesTotals(accumulator: SalesAccumulator): SalesTotals {
+  return {
+    orders: accumulator.orderIds.size,
+    quantity: accumulator.quantity,
+    amount: accumulator.amount.toNumber(),
+  };
+}
+
+function utcDayStart(value: Date): Date {
+  return new Date(
+    Date.UTC(value.getUTCFullYear(), value.getUTCMonth(), value.getUTCDate()),
+  );
+}
+
+function addUtcDays(value: Date, days: number): Date {
+  const next = new Date(value.getTime());
+  next.setUTCDate(next.getUTCDate() + days);
+  return next;
+}
+
+function dayKey(value: Date): string {
+  return value.toISOString().slice(0, 10);
+}
+
+export async function getAdminSalesSummary(
+  days: number,
+): Promise<AdminSalesSummary> {
+  const today = utcDayStart(new Date());
+  const todayKey = dayKey(today);
+  const windowStart = addUtcDays(today, -(days - 1));
+  const last7Start = addUtcDays(today, -6);
+  const last30Start = addUtcDays(today, -29);
+  const fetchStart = windowStart.getTime() < last30Start.getTime()
+    ? windowStart
+    : last30Start;
+
+  const rows = await prisma.dailySale.findMany({
+    where: { saleDate: { gte: fetchStart, lte: today } },
+    select: {
+      orderId: true,
+      productId: true,
+      saleDate: true,
+      quantity: true,
+      amount: true,
+    },
+    orderBy: { saleDate: "asc" },
+  });
+
+  const windowTotals = createSalesAccumulator();
+  const todayTotals = createSalesAccumulator();
+  const last7Totals = createSalesAccumulator();
+  const last30Totals = createSalesAccumulator();
+  const byDayTotals = new Map<string, SalesAccumulator>();
+  const byProduct = new Map<string, ProductSalesAccumulator>();
+
+  for (const row of rows) {
+    const inWindow = row.saleDate.getTime() >= windowStart.getTime();
+
+    if (inWindow) {
+      addSaleRow(windowTotals, row);
+
+      const key = dayKey(row.saleDate);
+      const dayAccumulator = byDayTotals.get(key) ?? createSalesAccumulator();
+      addSaleRow(dayAccumulator, row);
+      byDayTotals.set(key, dayAccumulator);
+
+      const productAccumulator = byProduct.get(row.productId) ?? {
+        quantity: 0,
+        amount: new Prisma.Decimal(0),
+      };
+      productAccumulator.quantity += row.quantity;
+      productAccumulator.amount = productAccumulator.amount.plus(row.amount);
+      byProduct.set(row.productId, productAccumulator);
+    }
+
+    if (row.saleDate.getTime() >= last7Start.getTime()) {
+      addSaleRow(last7Totals, row);
+    }
+    if (row.saleDate.getTime() >= last30Start.getTime()) {
+      addSaleRow(last30Totals, row);
+    }
+    if (dayKey(row.saleDate) === todayKey) {
+      addSaleRow(todayTotals, row);
+    }
+  }
+
+  const byDay: DailySalesRow[] = [];
+  for (let offset = 0; offset < days; offset += 1) {
+    const date = addUtcDays(today, -offset);
+    const key = dayKey(date);
+    const accumulator = byDayTotals.get(key) ?? createSalesAccumulator();
+    byDay.push({ date: key, ...salesTotals(accumulator) });
+  }
+
+  const ranked = [...byProduct.entries()].sort(
+    (a, b) => b[1].amount.minus(a[1].amount).toNumber(),
+  );
+  const top = ranked.slice(0, 10);
+  const products = await prisma.product.findMany({
+    where: { id: { in: top.map(([productId]) => productId) } },
+    select: { id: true, name: true },
+  });
+  const nameById = new Map(
+    products.map((product) => [product.id, product.name]),
+  );
+  const topProducts: TopProductSales[] = top.map(([productId, totals]) => ({
+    productId,
+    name: nameById.get(productId) ?? "",
+    quantity: totals.quantity,
+    amount: totals.amount.toNumber(),
+  }));
+
+  return {
+    totals: salesTotals(windowTotals),
+    today: salesTotals(todayTotals),
+    last7Days: salesTotals(last7Totals),
+    last30Days: salesTotals(last30Totals),
+    byDay,
+    topProducts,
+  };
 }
