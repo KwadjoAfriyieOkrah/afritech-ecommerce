@@ -105,6 +105,7 @@ const samsungSpecsSchema = z
 
 const laptopSpecsSchema = z
   .object({
+    colour: specText(40),
     processor: specText(80),
     ram: laptopRamSchema,
     storage: laptopStorageSchema,
@@ -269,11 +270,33 @@ const productFields = {
 
 // One field set drives both the single-product routes and every bulk row, so
 // a row can never be accepted under weaker rules than a single write.
-export const productInputSchema = z.object({
-  ...productFields,
-  colors: colorsSchema.optional(),
-  specs: z.unknown().optional(),
-});
+export const productInputSchema = z
+  .object({
+    ...productFields,
+    colors: colorsSchema.optional(),
+    specs: z.unknown().optional(),
+  })
+  .superRefine((value, ctx) => {
+    if (value.colors === undefined) return;
+
+    const specs = value.specs;
+    if (typeof specs !== "object" || specs === null || Array.isArray(specs)) {
+      return;
+    }
+
+    const colour = Reflect.get(specs, "colour");
+    if (typeof colour !== "string") return;
+
+    value.colors.forEach((color, index) => {
+      if (color.name !== colour) {
+        ctx.addIssue({
+          code: "custom",
+          path: ["colors", index, "name"],
+          message: `Colour name must match the spec colour "${colour}"`,
+        });
+      }
+    });
+  });
 
 export const bulkProductRowSchema = z.object({
   id: productIdSchema.optional(),
