@@ -128,6 +128,13 @@ export const PRODUCT_SPECS: Record<
   ],
   LAPTOP: [
     {
+      key: 'colour',
+      label: 'Colour',
+      type: 'text',
+      maxLength: 40,
+      placeholder: 'Silver'
+    },
+    {
       key: 'processor',
       label: 'Processor',
       type: 'text',
