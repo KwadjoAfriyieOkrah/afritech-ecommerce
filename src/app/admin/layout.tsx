@@ -6,9 +6,24 @@ import { useEffect, type ReactNode } from 'react';
 import { useUserStore } from '@/store';
 
 const ADMIN_LINKS = [
+  { href: '/admin', label: 'Dashboard' },
   { href: '/admin/orders', label: 'Orders' },
+  { href: '/admin/products', label: 'Products' },
+  { href: '/admin/products/bulk', label: 'Bulk upload' },
   { href: '/admin/riders', label: 'Riders' }
 ];
+
+function isActiveLink(href: string, pathname: string): boolean {
+  if (href === '/admin') return pathname === '/admin';
+  if (href === '/admin/products') {
+    return (
+      pathname === '/admin/products' ||
+      (pathname.startsWith('/admin/products/') &&
+        !pathname.startsWith('/admin/products/bulk'))
+    );
+  }
+  return pathname === href || pathname.startsWith(`${href}/`);
+}
 
 export default function AdminLayout({ children }: { children: ReactNode }) {
   const router = useRouter();
@@ -58,8 +73,7 @@ export default function AdminLayout({ children }: { children: ReactNode }) {
 
         <nav aria-label="Admin" className="flex items-center gap-2">
           {ADMIN_LINKS.map((link) => {
-            const isActive =
-              pathname === link.href || pathname.startsWith(`${link.href}/`);
+            const isActive = isActiveLink(link.href, pathname);
 
             return (
               <Link

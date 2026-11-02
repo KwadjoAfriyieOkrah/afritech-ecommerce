@@ -184,3 +184,175 @@ export async function updateAdminProduct(
     )
   );
 }
+
+export async function uploadProductImage(
+  productId: string,
+  file: File
+): Promise<string[]> {
+  const formData = new FormData();
+  formData.append('image', file);
+
+  const result = await unwrap(() =>
+    api.post<{ images: string[] }>(
+      `/admin/products/${encodeURIComponent(productId)}/images`,
+      formData,
+      {
+        headers: { 'Content-Type': undefined },
+        retry: false
+      }
+    )
+  );
+
+  return result.images;
+}
+
+export async function deleteProductImage(
+  productId: string,
+  index: number
+): Promise<string[]> {
+  const result = await unwrap(() =>
+    api.delete<{ images: string[] }>(
+      `/admin/products/${encodeURIComponent(productId)}/images/${index}`,
+      { retry: false }
+    )
+  );
+
+  return result.images;
+}
+
+export interface RestockResult {
+  productId: string;
+  color: AdminProductColor;
+}
+
+export async function restockColor(
+  productId: string,
+  colorId: string,
+  quantity: number
+): Promise<RestockResult> {
+  return unwrap(() =>
+    api.post<RestockResult>(
+      `/admin/products/${encodeURIComponent(productId)}/colors/${encodeURIComponent(colorId)}/restock`,
+      { quantity },
+      { retry: false }
+    )
+  );
+}
+
+export interface BulkRowError {
+  row: number;
+  errors: Array<{ field: string; message: string }>;
+}
+
+export interface BulkSummary {
+  totalRows: number;
+  validRows: number;
+  invalidRows: number;
+  creates: number;
+  updates: number;
+  stockAdjustments: number;
+}
+
+export interface BulkImportResult {
+  mode: 'dry-run' | 'commit';
+  committed: boolean;
+  summary: BulkSummary;
+  errors: BulkRowError[];
+  error?: string;
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+function isBulkSummary(value: unknown): value is BulkSummary {
+  return (
+    isRecord(value) &&
+    typeof value.totalRows === 'number' &&
+    typeof value.validRows === 'number' &&
+    typeof value.invalidRows === 'number' &&
+    typeof value.creates === 'number' &&
+    typeof value.updates === 'number' &&
+    typeof value.stockAdjustments === 'number'
+  );
+}
+
+function isBulkRowError(value: unknown): value is BulkRowError {
+  if (!isRecord(value) || typeof value.row !== 'number' || !Array.isArray(value.errors)) {
+    return false;
+  }
+  return value.errors.every(
+    (detail) =>
+      isRecord(detail) &&
+      typeof detail.field === 'string' &&
+      typeof detail.message === 'string'
+  );
+}
+
+function isBulkImportResult(value: unknown): value is BulkImportResult {
+  return (
+    isRecord(value) &&
+    (value.mode === 'dry-run' || value.mode === 'commit') &&
+    typeof value.committed === 'boolean' &&
+    isBulkSummary(value.summary) &&
+    Array.isArray(value.errors) &&
+    value.errors.every(isBulkRowError) &&
+    (value.error === undefined || typeof value.error === 'string')
+  );
+}
+
+export async function bulkImportProducts(
+  file: File,
+  confirm: boolean
+): Promise<BulkImportResult> {
+  const formData = new FormData();
+  formData.append('file', file);
+  if (confirm) {
+    formData.append('confirm', 'true');
+  }
+
+  try {
+    return await unwrap(() =>
+      api.post<BulkImportResult>('/admin/products/bulk', formData, {
+        headers: { 'Content-Type': undefined },
+        retry: false
+      })
+    );
+  } catch (error) {
+    const apiError = ApiError.from(error);
+    if (apiError.status === 400 && isBulkImportResult(apiError.details)) {
+      return apiError.details;
+    }
+    throw apiError;
+  }
+}
+
+export interface SalesTotals {
+  orders: number;
+  quantity: number;
+  amount: number;
+}
+
+export interface DailySalesRow extends SalesTotals {
+  date: string;
+}
+
+export interface TopProductSales {
+  productId: string;
+  name: string;
+  quantity: number;
+  amount: number;
+}
+
+export interface AdminSalesSummary {
+  totals: SalesTotals;
+  today: SalesTotals;
+  last7Days: SalesTotals;
+  last30Days: SalesTotals;
+  byDay: DailySalesRow[];
+  topProducts: TopProductSales[];
+}
+
+export async function getSalesSummary(days = 30): Promise<AdminSalesSummary> {
+  return unwrap(() => api.get<AdminSalesSummary>('/admin/sales', { params: { days } }));
+}

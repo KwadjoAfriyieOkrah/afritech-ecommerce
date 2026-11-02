@@ -4,8 +4,14 @@ import Link from 'next/link';
 import { useParams } from 'next/navigation';
 import { useCallback, useEffect, useState } from 'react';
 import { ProductForm } from '@/components/admin/ProductForm';
+import { ProductImages } from '@/components/admin/ProductImages';
+import { ColourStock } from '@/components/admin/ColourStock';
 import { ApiError } from '@/services/api';
-import { listAdminProducts, type AdminProduct } from '@/services/adminApi';
+import {
+  listAdminProducts,
+  type AdminProduct,
+  type AdminProductColor
+} from '@/services/adminApi';
 
 export default function EditAdminProductPage() {
   const params = useParams<{ id: string }>();
@@ -43,6 +49,13 @@ export default function EditAdminProductPage() {
     void load();
   }, [load]);
 
+  const handleColorsChange = useCallback(
+    (colors: AdminProductColor[]): void => {
+      setProduct((current) => (current ? { ...current, colors } : current));
+    },
+    []
+  );
+
   if (isLoading) {
     return (
       <div className="flex flex-col gap-4">
@@ -75,12 +88,34 @@ export default function EditAdminProductPage() {
     );
   }
 
+  const outOfStock =
+    product.colors.length > 0 &&
+    product.colors.every((color) => color.stock <= 0);
+
   return (
     <div className="flex flex-col gap-4">
       <Link href="/admin/products" className="btn btn-ghost w-fit px-0 text-sm">
         Back to products
       </Link>
       <ProductForm key={product.id} product={product} />
+      <ColourStock
+        productId={product.id}
+        colors={product.colors}
+        onColorsChange={handleColorsChange}
+      />
+      {outOfStock && (
+        <div
+          role="status"
+          className="rounded-lg border border-amber-200 bg-amber-50 p-5 text-sm text-amber-900"
+        >
+          <p>
+            This product is out of stock. Set stock on a colour to sell it
+            again, or switch it off with Active in the storefront so it is
+            hidden from customers. Nothing is deleted.
+          </p>
+        </div>
+      )}
+      <ProductImages productId={product.id} initialImages={product.images} />
     </div>
   );
 }
