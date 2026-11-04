@@ -8,6 +8,7 @@ import {
 } from "../controllers/orders.controller";
 import { optionalAuth } from "../middleware/optionalAuth";
 import { requireAuth } from "../middleware/requireAuth";
+import { orderCreationRateLimit } from "../middleware/orderPaymentRateLimits";
 
 const router = Router();
 
@@ -17,7 +18,7 @@ router.get("/track", trackOrderHandler);
 
 router.get("/", requireAuth, listOrders);
 // Guests may check out without an account.
-router.post("/", optionalAuth, submitOrder);
+router.post("/", orderCreationRateLimit, optionalAuth, submitOrder);
 router.get("/:id", optionalAuth, getOrder);
 
 export default router;

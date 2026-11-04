@@ -15,6 +15,7 @@ import {
   registerSchema,
   toValidationDetails,
 } from "../validation/auth.schemas";
+import { clearAuthCookie, setAuthCookie } from "../lib/authCookie";
 
 function sendValidationError(error: ZodError, res: Response): void {
   res.status(400).json({
@@ -39,7 +40,8 @@ export async function registerUser(req: Request, res: Response): Promise<void> {
 
   try {
     const result = await register(parsed.data);
-    res.status(201).json(result);
+    setAuthCookie(res, result.token);
+    res.status(201).json({ user: result.user });
   } catch (error) {
     if (error instanceof ConflictError) {
       res.status(409).json({ error: EMAIL_ALREADY_REGISTERED });
@@ -60,7 +62,8 @@ export async function loginUser(req: Request, res: Response): Promise<void> {
 
   try {
     const result = await login(parsed.data);
-    res.status(200).json(result);
+    setAuthCookie(res, result.token);
+    res.status(200).json({ user: result.user });
   } catch (error) {
     if (error instanceof InvalidCredentialsError) {
       res.status(401).json({ error: INVALID_CREDENTIALS });
@@ -78,4 +81,9 @@ export function getCurrentUserProfile(req: Request, res: Response): void {
   }
 
   res.status(200).json(user);
+}
+
+export function logoutUser(_req: Request, res: Response): void {
+  clearAuthCookie(res);
+  res.sendStatus(204);
 }

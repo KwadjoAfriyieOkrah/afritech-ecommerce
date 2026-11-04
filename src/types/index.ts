@@ -87,7 +87,7 @@ export interface RegisterPayload {
 }
 
 export interface AuthResponse {
-  token: string;
+  token?: string;
   user: User;
 }
 

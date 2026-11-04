@@ -134,7 +134,7 @@ export function AuthForm({ mode, onSuccess, onSwitchMode }: AuthFormProps) {
             })
           : await loginUser({ email: fields.email.trim(), password: fields.password });
 
-        setAuthToken(auth.token);
+        if (auth.token) setAuthToken(auth.token);
         setUser(auth.user);
 
         // Seed an empty checkout draft from the profile, never overwriting

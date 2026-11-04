@@ -10,6 +10,7 @@
     "start": "node dist/src/server.js",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "test": "tsx --test tests/payments.test.ts",
+    "test:session": "tsx --test tests/auth-cookie.test.ts tests/order-payment-rate-limits.test.ts tests/reject-untrusted-origin.test.ts",
     "db:generate": "prisma generate",
     "db:deploy": "prisma migrate deploy",
     "db:seed": "prisma db seed"
@@ -25,6 +26,7 @@
     "csv-parse": "^7.0.3",
     "dotenv": "^18.0.7",
     "express": "^4.21.2",
+    "express-rate-limit": "^8.7.3",
     "jsonwebtoken": "^9.0.3",
     "multer": "^2.4.0",
     "zod": "^4.6.5"

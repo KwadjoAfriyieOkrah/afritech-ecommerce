@@ -29,7 +29,7 @@ import {
   mockVerifyPayment
 } from './mockApi';
 
-const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:4000';
+const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || '/api';
 const AUTH_TOKEN_KEY = 'afritech_token';
 const REQUEST_TIMEOUT_MS = 15000;
 const MAX_RETRIES = 3;
@@ -122,7 +122,8 @@ export function clearAuthToken(): void {
 const api = axios.create({
   baseURL: API_BASE_URL,
   timeout: REQUEST_TIMEOUT_MS,
-  headers: { 'Content-Type': 'application/json' }
+  headers: { 'Content-Type': 'application/json' },
+  withCredentials: true
 });
 
 api.interceptors.request.use((config: InternalAxiosRequestConfig) => {
@@ -149,9 +150,8 @@ api.interceptors.response.use(
     }
 
     if (error.response?.status === 401) {
-      // Only treat as expired session if a token was sent
-      const hadToken = Boolean(getAuthToken());
-      if (hadToken) {
+      const hadSession = Boolean(getAuthToken() || useUserStore.getState().user);
+      if (hadSession) {
         clearAuthToken();
         useUserStore.getState().setUser(null);
       }
@@ -339,24 +339,25 @@ export async function loginUser(credentials: AuthCredentials): Promise<AuthRespo
   return data;
 }
 
-/**
- * Resolves the stored token into a user on app load. Throws when there is no
- * token or the API rejects it, so callers treat the visitor as signed out.
- */
+/** Resolves the cookie-backed session, or the mock token, into the current user. */
 export async function fetchCurrentUser(): Promise<User> {
-  const token = getAuthToken();
-
-  if (!token) {
-    throw new ApiError('You are not signed in.', 401, 'NO_SESSION');
+  if (isMockApiEnabled()) {
+    const token = getAuthToken();
+    if (!token) throw new ApiError('You are not signed in.', 401, 'NO_SESSION');
+    return mockCurrentUser(token);
   }
-
-  if (isMockApiEnabled()) return mockCurrentUser(token);
 
   const { data } = await api.get<User>('/auth/me');
   return data;
 }
 
-/** Orders for the signed-in user. Scope comes from the bearer token server-side. */
+export async function logoutUser(): Promise<void> {
+  if (isMockApiEnabled()) return;
+
+  await api.post<void>('/auth/logout', undefined, { retry: false });
+}
+
+/** Orders for the signed-in user. Scope comes from the session server-side. */
 export async function fetchUserOrders(user: User): Promise<Order[]> {
   if (isMockApiEnabled()) return mockFetchUserOrders(user);
 

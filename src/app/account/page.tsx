@@ -5,7 +5,7 @@ import { useRouter } from 'next/navigation';
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { HiOutlineClipboardList, HiOutlineLogout, HiOutlineUser } from 'react-icons/hi';
 import { toast } from 'sonner';
-import { ApiError, clearAuthToken, fetchUserOrders } from '@/services/api';
+import { ApiError, clearAuthToken, fetchUserOrders, logoutUser } from '@/services/api';
 import { useOrderStore, useUserStore } from '@/store';
 import { OrderStatus, type Order } from '@/types';
 import { ErrorBoundary } from '@/components/shared/ErrorBoundary';
@@ -179,7 +179,14 @@ export default function AccountPage() {
     return Array.from(byId.values()).sort((a, b) => b.createdAt.localeCompare(a.createdAt));
   }, [localHistory, orders, user]);
 
-  const handleLogout = () => {
+  const handleLogout = async () => {
+    try {
+      await logoutUser();
+    } catch (caught) {
+      toast.error(ApiError.from(caught).message);
+      return;
+    }
+
     // Clear the token, the user, and everything the next person on this
     // device could use to read this account.
     clearAuthToken();

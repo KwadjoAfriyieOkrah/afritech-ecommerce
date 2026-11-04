@@ -2,15 +2,8 @@ import type { NextFunction, Request, Response } from "express";
 
 import { getCurrentUser, verifyToken } from "../services/auth.service";
 import { UNAUTHORIZED_MESSAGE } from "./requireAuth";
-
-function readBearerToken(header: string | undefined): string | null {
-  if (!header) return null;
-
-  const [scheme, token] = header.split(" ");
-  if (scheme !== "Bearer" || !token) return null;
-
-  return token;
-}
+import { clearAuthCookie } from "../lib/authCookie";
+import { readRequestAuthToken } from "./requestAuthToken";
 
 /**
  * Attaches req.authUser when a valid Bearer token is supplied, but does not
@@ -22,20 +15,21 @@ export async function optionalAuth(
   res: Response,
   next: NextFunction,
 ): Promise<void> {
-  const header = req.headers.authorization;
-  if (!header) {
+  const { token, provided } = readRequestAuthToken(req);
+  if (!provided) {
     next();
     return;
   }
 
-  const token = readBearerToken(header);
   if (!token) {
+    clearAuthCookie(res);
     res.status(401).json({ error: UNAUTHORIZED_MESSAGE });
     return;
   }
 
   const payload = verifyToken(token);
   if (!payload) {
+    clearAuthCookie(res);
     res.status(401).json({ error: UNAUTHORIZED_MESSAGE });
     return;
   }
@@ -43,6 +37,7 @@ export async function optionalAuth(
   try {
     const user = await getCurrentUser(payload.sub);
     if (!user) {
+      clearAuthCookie(res);
       res.status(401).json({ error: UNAUTHORIZED_MESSAGE });
       return;
     }

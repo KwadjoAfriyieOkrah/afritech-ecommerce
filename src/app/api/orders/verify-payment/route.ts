@@ -2,6 +2,8 @@ import { NextResponse, type NextRequest } from 'next/server';
 import api, { ApiError } from '@/services/api';
 import type { PaymentVerification } from '@/types';
 
+const BACKEND_API_URL = (process.env.BACKEND_API_URL || 'http://localhost:4000').replace(/\/+$/, '');
+
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null;
 }
@@ -43,10 +45,10 @@ export async function POST(request: NextRequest) {
 
   try {
     const { data } = await api.get<PaymentVerification>(
-      `/payments/verify/${encodeURIComponent(reference)}`,
+      `${BACKEND_API_URL}/payments/verify/${encodeURIComponent(reference)}`,
       {
         retry: true,
-        headers: { Authorization: request.headers.get('authorization') ?? '' }
+        headers: { Cookie: request.headers.get('cookie') ?? '' }
       }
     );
 

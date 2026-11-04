@@ -2,12 +2,12 @@
 
 import { useEffect } from 'react';
 import { clearAuthToken, fetchCurrentUser, getAuthToken } from '@/services/api';
+import { isMockApiEnabled } from '@/services/mockApi';
 import { useUserStore } from '@/store';
 
 /**
- * Restores the signed-in user on first paint. The token lives in
- * localStorage, so without this every reload would look like a sign-out
- * even though the token is still there. Renders nothing.
+ * Restores the signed-in user from the HttpOnly cookie on first paint.
+ * Mock mode keeps its browser-local token. Renders nothing.
  */
 export function SessionLoader() {
   const setUser = useUserStore((state) => state.setUser);
@@ -15,8 +15,10 @@ export function SessionLoader() {
 
   useEffect(() => {
     let cancelled = false;
+    const mockMode = isMockApiEnabled();
 
-    if (!getAuthToken()) {
+    if (!mockMode) clearAuthToken();
+    if (mockMode && !getAuthToken()) {
       setSessionReady(true);
       return;
     }

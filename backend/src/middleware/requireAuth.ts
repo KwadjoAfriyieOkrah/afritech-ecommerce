@@ -5,6 +5,8 @@ import {
   verifyToken,
   type PublicUser,
 } from "../services/auth.service";
+import { clearAuthCookie } from "../lib/authCookie";
+import { readRequestAuthToken } from "./requestAuthToken";
 
 export const UNAUTHORIZED_MESSAGE = "Unauthorized";
 
@@ -16,16 +18,8 @@ declare global {
   }
 }
 
-function readBearerToken(header: string | undefined): string | null {
-  if (!header) return null;
-
-  const [scheme, token] = header.split(" ");
-  if (scheme !== "Bearer" || !token) return null;
-
-  return token;
-}
-
 function reject(res: Response): void {
+  clearAuthCookie(res);
   res.status(401).json({ error: UNAUTHORIZED_MESSAGE });
 }
 
@@ -34,7 +28,7 @@ export async function requireAuth(
   res: Response,
   next: NextFunction,
 ): Promise<void> {
-  const token = readBearerToken(req.headers.authorization);
+  const { token } = readRequestAuthToken(req);
   if (!token) {
     reject(res);
     return;

@@ -9,9 +9,11 @@ import deliveryZonesRouter from "./routes/delivery-zones.routes";
 import paymentsRouter from "./routes/payments.routes";
 import adminRouter from "./routes/admin.routes";
 import { handlePaystackWebhook } from "./controllers/paystack-webhook.controller";
+import { rejectUntrustedOrigin } from "./middleware/rejectUntrustedOrigin";
 
 const app = express();
-app.use(cors({ origin: env.FRONTEND_URL }));
+app.set("trust proxy", env.TRUST_PROXY_HOPS);
+app.use(cors({ origin: env.FRONTEND_URL, credentials: true }));
 
 // Paystack signs the exact bytes it sends, so this route parses its own raw
 // body and verifies the HMAC before express.json() (registered below) can
@@ -21,6 +23,8 @@ app.use(
   express.raw({ type: "application/json" }),
   handlePaystackWebhook,
 );
+
+app.use(rejectUntrustedOrigin);
 
 app.use(express.json());
 
