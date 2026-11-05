@@ -4,6 +4,7 @@ import { Header } from "@/components/shared/Header";
 import { SessionLoader } from "@/components/auth/SessionLoader";
 import { Toaster } from "@/components/shared/Toast";
 import { WhatsAppButton } from "@/components/shared/WhatsAppButton";
+import { Footer } from "@/components/Footer";
 import "@/styles/globals.css";
 
 const poppins = Poppins({
@@ -24,6 +25,7 @@ export default function RootLayout({ children }: LayoutProps<"/">) {
         <SessionLoader />
         <Header />
         <main className="flex-1">{children}</main>
+        <Footer />
         <Toaster />
         <WhatsAppButton />
       </body>
