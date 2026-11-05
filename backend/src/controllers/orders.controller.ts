@@ -209,8 +209,7 @@ export async function submitOrder(req: Request, res: Response): Promise<void> {
 }
 
 // Public tracking. The reference plus the phone number on the order are the
-// two factors. This endpoint is rate limited in production, because it is open
-// to guests.
+// two factors. The route is rate limited because it is open to guests.
 export async function trackOrderHandler(
   req: Request,
   res: Response,
