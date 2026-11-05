@@ -1,7 +1,11 @@
-import { Prisma, Role } from "@prisma/client";
+import { Prisma, Role } from "../generated/prisma/client";
 import bcrypt from "bcryptjs";
 import jwt from "jsonwebtoken";
 
+import {
+  createCredentialVersion,
+  matchesCredentialVersion,
+} from "../lib/credentialVersion";
 import { env } from "../lib/env";
 import { prisma } from "../lib/prisma";
 
@@ -66,6 +70,7 @@ interface UserRecord {
 interface AuthTokenPayload {
   sub: string;
   role: Role;
+  credentialVersion: string;
 }
 
 export function normaliseEmail(email: string): string {
@@ -82,10 +87,23 @@ export function publicUser(user: UserRecord): PublicUser {
   };
 }
 
-function signToken(userId: string, role: Role): string {
-  return jwt.sign({ sub: userId, role }, env.JWT_SECRET, {
-    expiresIn: TOKEN_TTL,
-  });
+function signToken(
+  userId: string,
+  role: Role,
+  passwordHash: string,
+): string {
+  return jwt.sign(
+    {
+      sub: userId,
+      role,
+      credentialVersion: createCredentialVersion(
+        passwordHash,
+        env.JWT_SECRET,
+      ),
+    },
+    env.JWT_SECRET,
+    { expiresIn: TOKEN_TTL },
+  );
 }
 
 function isRole(value: unknown): value is Role {
@@ -101,11 +119,12 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 function readTokenPayload(decoded: unknown): AuthTokenPayload | null {
   if (!isRecord(decoded)) return null;
 
-  const { sub, role } = decoded;
+  const { sub, role, credentialVersion } = decoded;
   if (typeof sub !== "string") return null;
   if (!isRole(role)) return null;
+  if (typeof credentialVersion !== "string") return null;
 
-  return { sub, role };
+  return { sub, role, credentialVersion };
 }
 
 export function verifyToken(token: string): AuthTokenPayload | null {
@@ -139,7 +158,10 @@ export async function register(input: RegisterInput): Promise<AuthResult> {
       },
     });
 
-    return { token: signToken(user.id, user.role), user: publicUser(user) };
+    return {
+      token: signToken(user.id, user.role, user.passwordHash),
+      user: publicUser(user),
+    };
   } catch (error) {
     if (
       error instanceof Prisma.PrismaClientKnownRequestError &&
@@ -163,14 +185,38 @@ export async function login(input: LoginInput): Promise<AuthResult> {
   const passwordMatches = await bcrypt.compare(input.password, user.passwordHash);
   if (!passwordMatches) throw new InvalidCredentialsError(INVALID_CREDENTIALS);
 
-  return { token: signToken(user.id, user.role), user: publicUser(user) };
+  return {
+    token: signToken(user.id, user.role, user.passwordHash),
+    user: publicUser(user),
+  };
 }
 
-export async function getCurrentUser(userId: string): Promise<PublicUser | null> {
+export async function getCurrentUser(
+  userId: string,
+  tokenCredentialVersion: string,
+): Promise<PublicUser | null> {
   const user = await prisma.user.findUnique({
     where: { id: userId },
-    select: { id: true, email: true, phone: true, name: true, role: true },
+    select: {
+      id: true,
+      email: true,
+      phone: true,
+      name: true,
+      role: true,
+      passwordHash: true,
+    },
   });
+
+  if (
+    user &&
+    !matchesCredentialVersion(
+      user.passwordHash,
+      env.JWT_SECRET,
+      tokenCredentialVersion,
+    )
+  ) {
+    return null;
+  }
 
   return user ? publicUser(user) : null;
 }

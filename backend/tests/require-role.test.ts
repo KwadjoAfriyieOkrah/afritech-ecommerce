@@ -3,6 +3,7 @@ import { randomUUID } from "node:crypto";
 import type { NextFunction, Request, Response } from "express";
 import type { Server } from "node:http";
 import { after, before, test } from "node:test";
+import { createCredentialVersion } from "../src/lib/credentialVersion";
 
 // ---------------------------------------------------------------------------
 // DATABASE_URL_TEST guard. Runs at module load, before any test executes and
@@ -49,7 +50,7 @@ console.log(`Test database: ${testDatabaseName}`);
 // Required after the override so lib/env and PrismaClient bind to the test DB.
 const { prisma } = require("../src/lib/prisma") as typeof import("../src/lib/prisma");
 const { env } = require("../src/lib/env") as typeof import("../src/lib/env");
-const { Role } = require("@prisma/client") as typeof import("@prisma/client");
+const { Role } = require("../src/generated/prisma/client") as typeof import("../src/generated/prisma/client");
 const jwt = require("jsonwebtoken") as typeof import("jsonwebtoken");
 const express = require("express") as typeof import("express");
 const adminRoutes = require("../src/routes/admin.routes") as typeof import("../src/routes/admin.routes");
@@ -57,6 +58,7 @@ const { requireRole } = require("../src/middleware/requireRole") as typeof impor
 
 const UNAUTHORIZED_BODY = { error: "Unauthorized" };
 const FORBIDDEN_BODY = { error: "Forbidden" };
+const TEST_PASSWORD_HASH = "test-only-not-a-real-hash";
 
 const app = express();
 app.use(express.json());
@@ -112,19 +114,33 @@ function nextSuffix(): string {
   return `${Date.now().toString(36)}-${randomUUID().slice(0, 8)}`;
 }
 
-function signToken(sub: string, role: import("@prisma/client").Role): string {
-  return jwt.sign({ sub, role }, env.JWT_SECRET, { expiresIn: "7d" });
+function signToken(
+  sub: string,
+  role: import("../src/generated/prisma/client").Role,
+): string {
+  return jwt.sign(
+    {
+      sub,
+      role,
+      credentialVersion: createCredentialVersion(
+        TEST_PASSWORD_HASH,
+        env.JWT_SECRET,
+      ),
+    },
+    env.JWT_SECRET,
+    { expiresIn: "7d" },
+  );
 }
 
 async function seedUser(
   suffix: string,
-  role: import("@prisma/client").Role,
+  role: import("../src/generated/prisma/client").Role,
 ): Promise<string> {
   const user = await prisma.user.create({
     data: {
       name: "Role Test",
       email: `require-role-${role.toLowerCase()}-${suffix}@test.local`,
-      passwordHash: "test-only-not-a-real-hash",
+      passwordHash: TEST_PASSWORD_HASH,
       role,
     },
     select: { id: true },

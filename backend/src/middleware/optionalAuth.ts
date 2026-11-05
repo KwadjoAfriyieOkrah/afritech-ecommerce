@@ -35,7 +35,7 @@ export async function optionalAuth(
   }
 
   try {
-    const user = await getCurrentUser(payload.sub);
+    const user = await getCurrentUser(payload.sub, payload.credentialVersion);
     if (!user) {
       clearAuthCookie(res);
       res.status(401).json({ error: UNAUTHORIZED_MESSAGE });

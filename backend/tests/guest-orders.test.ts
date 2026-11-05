@@ -2,8 +2,9 @@ import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
 import type { Server } from "node:http";
 import bcrypt from "bcryptjs";
-import { Prisma, Role } from "@prisma/client";
+import { Prisma, Role } from "../src/generated/prisma/client";
 import { after, before, test } from "node:test";
+import { createCredentialVersion } from "../src/lib/credentialVersion";
 
 const testDatabaseUrl = process.env.DATABASE_URL_TEST;
 if (!testDatabaseUrl) {
@@ -43,10 +44,27 @@ console.log(`Test database: ${testDatabaseName}`);
 const jwt = require("jsonwebtoken") as typeof import("jsonwebtoken");
 const { env } = require("../src/lib/env") as typeof import("../src/lib/env");
 
-function signCustomerToken(userId: string): string {
-  return jwt.sign({ sub: userId, role: Role.CUSTOMER }, env.JWT_SECRET, {
-    expiresIn: "7d",
+async function signCustomerToken(userId: string): Promise<string> {
+  const user = await prisma.user.findUnique({
+    where: { id: userId },
+    select: { passwordHash: true },
   });
+  if (!user) {
+    throw new Error("Cannot sign a token for a missing test user");
+  }
+
+  return jwt.sign(
+    {
+      sub: userId,
+      role: Role.CUSTOMER,
+      credentialVersion: createCredentialVersion(
+        user.passwordHash,
+        env.JWT_SECRET,
+      ),
+    },
+    env.JWT_SECRET,
+    { expiresIn: "7d" },
+  );
 }
 
 type AppModule = typeof import("../src/app");
@@ -590,7 +608,7 @@ test("track and guest read return the unknown-order body after the grace window"
 
 test("signed-in owner can read an order after the tracking grace window", async () => {
   const fixture = await seedFixture();
-  const token = signCustomerToken(fixture.user.id);
+  const token = await signCustomerToken(fixture.user.id);
   const order = await createOrderForWindow(fixture, "owner", token);
 
   await prisma.order.update({

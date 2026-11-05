@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
 import type { Server } from "node:http";
 import { after, before, test } from "node:test";
+import { createCredentialVersion } from "../src/lib/credentialVersion";
 
 // ---------------------------------------------------------------------------
 // DATABASE_URL_TEST guard. Runs at module load, before any test executes and
@@ -48,7 +49,7 @@ console.log(`Test database: ${testDatabaseName}`);
 // Required after the override so lib/env and PrismaClient bind to the test DB.
 const { prisma } = require("../src/lib/prisma") as typeof import("../src/lib/prisma");
 const { env } = require("../src/lib/env") as typeof import("../src/lib/env");
-const { Prisma, Role } = require("@prisma/client") as typeof import("@prisma/client");
+const { Prisma, Role } = require("../src/generated/prisma/client") as typeof import("../src/generated/prisma/client");
 const jwt = require("jsonwebtoken") as typeof import("jsonwebtoken");
 const express = require("express") as typeof import("express");
 const ordersRoutes = require("../src/routes/orders.routes") as typeof import("../src/routes/orders.routes");
@@ -85,10 +86,21 @@ function nextSuffix(): string {
   return `${Date.now().toString(36)}-${randomUUID().slice(0, 8)}`;
 }
 
+const TEST_PASSWORD_HASH = "test-only-not-a-real-hash";
+
 function signToken(userId: string): string {
-  return jwt.sign({ sub: userId, role: Role.CUSTOMER }, env.JWT_SECRET, {
-    expiresIn: "7d",
-  });
+  return jwt.sign(
+    {
+      sub: userId,
+      role: Role.CUSTOMER,
+      credentialVersion: createCredentialVersion(
+        TEST_PASSWORD_HASH,
+        env.JWT_SECRET,
+      ),
+    },
+    env.JWT_SECRET,
+    { expiresIn: "7d" },
+  );
 }
 
 interface SeedCatalogue {
@@ -155,7 +167,7 @@ async function seedUser(suffix: string): Promise<string> {
     data: {
       name: "Orders Auth Test",
       email: `orders-auth-${suffix}@test.local`,
-      passwordHash: "test-only-not-a-real-hash",
+      passwordHash: TEST_PASSWORD_HASH,
     },
     select: { id: true },
   });

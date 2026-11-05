@@ -4,6 +4,7 @@ import type { Server } from "node:http";
 import { after, before, test } from "node:test";
 
 import type { CloudinaryClient } from "../src/lib/cloudinary";
+import { createCredentialVersion } from "../src/lib/credentialVersion";
 
 // ---------------------------------------------------------------------------
 // DATABASE_URL_TEST guard. Runs at module load, before any test executes and
@@ -47,7 +48,7 @@ console.log(`Test database: ${testDatabaseName}`);
 // Required after the override so lib/env and PrismaClient bind to the test DB.
 const { prisma } = require("../src/lib/prisma") as typeof import("../src/lib/prisma");
 const { env } = require("../src/lib/env") as typeof import("../src/lib/env");
-const { Prisma, Role } = require("@prisma/client") as typeof import("@prisma/client");
+const { Prisma, Role } = require("../src/generated/prisma/client") as typeof import("../src/generated/prisma/client");
 const jwt = require("jsonwebtoken") as typeof import("jsonwebtoken");
 const express = require("express") as typeof import("express");
 const adminRoutes = require("../src/routes/admin.routes") as typeof import("../src/routes/admin.routes");
@@ -152,8 +153,21 @@ function nextSuffix(): string {
   return `${Date.now().toString(36)}-${randomUUID().slice(0, 8)}`;
 }
 
+const TEST_PASSWORD_HASH = "test-only-not-a-real-hash";
+
 function signToken(userId: string, role: string): string {
-  return jwt.sign({ sub: userId, role }, env.JWT_SECRET, { expiresIn: "7d" });
+  return jwt.sign(
+    {
+      sub: userId,
+      role,
+      credentialVersion: createCredentialVersion(
+        TEST_PASSWORD_HASH,
+        env.JWT_SECRET,
+      ),
+    },
+    env.JWT_SECRET,
+    { expiresIn: "7d" },
+  );
 }
 
 async function createAdmin(suffix: string): Promise<string> {
@@ -161,7 +175,7 @@ async function createAdmin(suffix: string): Promise<string> {
     data: {
       name: "Admin Uploads Test",
       email: `admin-uploads-${suffix}@test.local`,
-      passwordHash: "test-only-not-a-real-hash",
+      passwordHash: TEST_PASSWORD_HASH,
       role: Role.ADMIN,
     },
     select: { id: true },
@@ -174,7 +188,7 @@ async function createCustomer(suffix: string): Promise<string> {
     data: {
       name: "Customer Uploads Test",
       email: `customer-uploads-${suffix}@test.local`,
-      passwordHash: "test-only-not-a-real-hash",
+      passwordHash: TEST_PASSWORD_HASH,
       role: Role.CUSTOMER,
     },
     select: { id: true },

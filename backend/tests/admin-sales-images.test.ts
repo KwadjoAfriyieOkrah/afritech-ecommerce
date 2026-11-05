@@ -4,6 +4,7 @@ import type { Server } from "node:http";
 import { after, before, test } from "node:test";
 
 import type { CloudinaryClient } from "../src/lib/cloudinary";
+import { createCredentialVersion } from "../src/lib/credentialVersion";
 
 // ---------------------------------------------------------------------------
 // DATABASE_URL_TEST guard
@@ -46,7 +47,7 @@ console.log(`Test database: ${testDatabaseName}`);
 // Required after override
 const prismaModule: typeof import("../src/lib/prisma") = require("../src/lib/prisma");
 const envModule: typeof import("../src/lib/env") = require("../src/lib/env");
-const clientModule: typeof import("@prisma/client") = require("@prisma/client");
+const clientModule: typeof import("../src/generated/prisma/client") = require("../src/generated/prisma/client");
 const jwt: typeof import("jsonwebtoken") = require("jsonwebtoken");
 const express: typeof import("express") = require("express");
 const adminRoutes: typeof import("../src/routes/admin.routes") = require("../src/routes/admin.routes");
@@ -127,8 +128,21 @@ function nextSuffix(): string {
   return `${Date.now().toString(36)}-${randomUUID().slice(0, 8)}`;
 }
 
+const TEST_PASSWORD_HASH = "test-only-not-a-real-hash";
+
 function signToken(userId: string, role: string): string {
-  return jwt.sign({ sub: userId, role }, env.JWT_SECRET, { expiresIn: "7d" });
+  return jwt.sign(
+    {
+      sub: userId,
+      role,
+      credentialVersion: createCredentialVersion(
+        TEST_PASSWORD_HASH,
+        env.JWT_SECRET,
+      ),
+    },
+    env.JWT_SECRET,
+    { expiresIn: "7d" },
+  );
 }
 
 async function createAdmin(suffix: string): Promise<string> {
@@ -136,7 +150,7 @@ async function createAdmin(suffix: string): Promise<string> {
     data: {
       name: "Admin Sales Images Test",
       email: `admin-sales-${suffix}@test.local`,
-      passwordHash: "test-only-not-a-real-hash",
+      passwordHash: TEST_PASSWORD_HASH,
       role: Role.ADMIN,
     },
     select: { id: true },
@@ -149,7 +163,7 @@ async function createCustomer(suffix: string): Promise<string> {
     data: {
       name: "Customer Sales Images Test",
       email: `customer-sales-${suffix}@test.local`,
-      passwordHash: "test-only-not-a-real-hash",
+      passwordHash: TEST_PASSWORD_HASH,
       role: Role.CUSTOMER,
     },
     select: { id: true },

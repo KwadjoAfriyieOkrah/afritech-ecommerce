@@ -41,7 +41,7 @@ export async function requireAuth(
   }
 
   try {
-    const user = await getCurrentUser(payload.sub);
+    const user = await getCurrentUser(payload.sub, payload.credentialVersion);
     if (!user) {
       reject(res);
       return;
