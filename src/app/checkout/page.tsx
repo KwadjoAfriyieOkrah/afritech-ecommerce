@@ -63,17 +63,31 @@ export default function CheckoutPage() {
   const [expiredNotice, setExpiredNotice] = useState(false);
 
   const loadZones = useCallback(async () => {
-    setZonesError(null);
     try {
-      setZones(await getDeliveryZones());
+      const nextZones = await getDeliveryZones();
+      setZones(nextZones);
+      setZonesError(null);
     } catch (caught) {
       setZonesError(ApiError.from(caught).message);
     }
   }, []);
 
   useEffect(() => {
-    void loadZones();
-  }, [loadZones]);
+    let active = true;
+    void getDeliveryZones()
+      .then((nextZones) => {
+        if (!active) return;
+        setZones(nextZones);
+        setZonesError(null);
+      })
+      .catch((caught: unknown) => {
+        if (active) setZonesError(ApiError.from(caught).message);
+      });
+
+    return () => {
+      active = false;
+    };
+  }, []);
 
   // Read-only stock and price probe. It never removes a line and never changes
   // a quantity: it only records each line's status and the server unit price.
@@ -101,8 +115,30 @@ export default function CheckoutPage() {
   }, [syncAvailability]);
 
   useEffect(() => {
-    void refreshAvailability();
-  }, [refreshAvailability]);
+    let active = true;
+    const currentItems = useCartStore.getState().items;
+    if (currentItems.length > 0) {
+      void checkAvailability(
+        currentItems.map((item) => ({
+          productId: item.productId,
+          color: item.color ?? '',
+          quantity: item.quantity
+        }))
+      )
+        .then((results) => {
+          if (!active) return;
+          syncAvailability(results);
+          setAvailabilityError(null);
+        })
+        .catch((caught: unknown) => {
+          if (active) setAvailabilityError(ApiError.from(caught).message);
+        });
+    }
+
+    return () => {
+      active = false;
+    };
+  }, [syncAvailability]);
 
   useEffect(() => {
     const onFocus = () => {

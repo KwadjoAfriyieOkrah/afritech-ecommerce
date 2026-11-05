@@ -136,27 +136,43 @@ export default function AccountPage() {
   const clearOrders = useOrderStore((state) => state.clearOrders);
   const localHistory = useOrderStore((state) => state.orderHistory);
 
-  const [orders, setOrders] = useState<Order[]>([]);
-  const [isLoading, setIsLoading] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+  const [ordersResult, setOrdersResult] = useState<{
+    userId: string;
+    orders: Order[];
+    error: string | null;
+  } | null>(null);
+  const [isRefreshing, setIsRefreshing] = useState(false);
 
-  const load = useCallback(async () => {
+  const load = useCallback(async (isActive: () => boolean = () => true) => {
     if (!user) return;
 
-    setIsLoading(true);
-    setError(null);
-
     try {
-      setOrders(await fetchUserOrders(user));
+      const nextOrders = await fetchUserOrders(user);
+      if (isActive()) {
+        setOrdersResult({ userId: user.id, orders: nextOrders, error: null });
+      }
     } catch (caught) {
-      setError(ApiError.from(caught).message);
+      if (isActive()) {
+        setOrdersResult((current) => ({
+          userId: user.id,
+          orders: current?.userId === user.id ? current.orders : [],
+          error: ApiError.from(caught).message,
+        }));
+      }
     } finally {
-      setIsLoading(false);
+      if (isActive()) setIsRefreshing(false);
     }
   }, [user]);
 
   useEffect(() => {
-    if (sessionReady && user) void load();
+    if (!sessionReady || !user) return;
+
+    let active = true;
+    void load(() => active);
+
+    return () => {
+      active = false;
+    };
   }, [sessionReady, user, load]);
 
   // Local orders from this session are merged in, so an order placed minutes
@@ -165,6 +181,8 @@ export default function AccountPage() {
   // visitor's guest orders never surface here.
   const visibleOrders = useMemo(() => {
     const email = user ? user.email.trim().toLowerCase() : '';
+    const orders =
+      ordersResult?.userId === user?.id ? ordersResult?.orders ?? [] : [];
     const isOwn = (order: Order) =>
       user !== null &&
       (order.userId === user.id || order.customerEmail?.trim().toLowerCase() === email);
@@ -177,7 +195,16 @@ export default function AccountPage() {
     for (const order of orders) byId.set(order.id, order);
 
     return Array.from(byId.values()).sort((a, b) => b.createdAt.localeCompare(a.createdAt));
-  }, [localHistory, orders, user]);
+  }, [localHistory, ordersResult, user]);
+
+  const isLoading =
+    isRefreshing || (user !== null && ordersResult?.userId !== user.id);
+  const error =
+    ordersResult?.userId === user?.id ? ordersResult?.error ?? null : null;
+  const refresh = () => {
+    setIsRefreshing(true);
+    void load();
+  };
 
   const handleLogout = async () => {
     try {
@@ -242,7 +269,7 @@ export default function AccountPage() {
 
             <button
               type="button"
-              onClick={() => void load()}
+              onClick={refresh}
               disabled={isLoading}
               className="btn btn-ghost px-1 text-xs"
             >
@@ -253,7 +280,7 @@ export default function AccountPage() {
           {error && (
             <div role="alert" className="alert-error mt-4 flex items-center justify-between gap-3">
               <p>{error}</p>
-              <button type="button" onClick={() => void load()} className="btn btn-outline text-xs">
+              <button type="button" onClick={refresh} className="btn btn-outline text-xs">
                 Retry
               </button>
             </div>

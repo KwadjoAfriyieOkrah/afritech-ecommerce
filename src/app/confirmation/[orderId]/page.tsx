@@ -33,19 +33,13 @@ export default function ConfirmationPage() {
   // confirmed.
   const [order, setOrder] = useState<Order | null>(null);
   const [isLoading, setIsLoading] = useState(true);
+  const isOrderLoading = Boolean(orderId) && isLoading;
   const [error, setError] = useState<string | null>(null);
   const [copied, setCopied] = useState(false);
   const copyTimeoutRef = useRef<number | null>(null);
 
   const load = useCallback(async () => {
-    if (!orderId) {
-      setError('That order link is not valid.');
-      setIsLoading(false);
-      return;
-    }
-
-    setIsLoading(true);
-    setError(null);
+    if (!orderId) return;
 
     let accessToken: string | null = null;
     try {
@@ -57,6 +51,7 @@ export default function ConfirmationPage() {
     try {
       const loaded = await getOrder(orderId, accessToken);
       setOrder(loaded);
+      setError(null);
       // The token is only needed to load this order. Drop it once the order is
       // on screen; if the load failed, keep it so Try again can use it.
       try {
@@ -71,8 +66,31 @@ export default function ConfirmationPage() {
   }, [orderId]);
 
   useEffect(() => {
-    void load();
-  }, [load]);
+    if (!orderId) return;
+
+    let active = true;
+    let accessToken: string | null = null;
+    try {
+      accessToken = window.localStorage.getItem(`afritech-order-token:${orderId}`);
+    } catch {}
+
+    void getOrder(orderId, accessToken)
+      .then((loaded) => {
+        if (!active) return;
+        setOrder(loaded);
+        setError(null);
+      })
+      .catch((caught: unknown) => {
+        if (active) setError(ApiError.from(caught).message);
+      })
+      .finally(() => {
+        if (active) setIsLoading(false);
+      });
+
+    return () => {
+      active = false;
+    };
+  }, [orderId]);
 
   const copyReference = useCallback(async () => {
     const reference = order?.reference;
@@ -100,7 +118,7 @@ export default function ConfirmationPage() {
     };
   }, []);
 
-  if (isLoading) {
+  if (isOrderLoading) {
     return (
       <div className="mx-auto w-full max-w-3xl px-4 py-8 sm:px-6">
         <OrderSummarySkeleton />
@@ -117,7 +135,15 @@ export default function ConfirmationPage() {
             <p className="mt-1 text-red-700">{error ?? 'Order not found.'}</p>
           </div>
           <div className="flex flex-wrap gap-2">
-            <button type="button" onClick={() => void load()} className="btn btn-outline">
+            <button
+              type="button"
+              onClick={() => {
+                setIsLoading(true);
+                setError(null);
+                void load();
+              }}
+              className="btn btn-outline"
+            >
               Try again
             </button>
             <Link href="/products" className="btn btn-primary">
