@@ -20,11 +20,10 @@ export default function AdminDashboardPage() {
   const [error, setError] = useState<string | null>(null);
 
   const load = useCallback(async () => {
-    setIsLoading(true);
-    setError(null);
-
     try {
-      setSummary(await getSalesSummary(30));
+      const nextSummary = await getSalesSummary(30);
+      setSummary(nextSummary);
+      setError(null);
     } catch (caught) {
       setSummary(null);
       setError(ApiError.from(caught).message);
@@ -34,8 +33,27 @@ export default function AdminDashboardPage() {
   }, []);
 
   useEffect(() => {
-    void load();
-  }, [load]);
+    let active = true;
+
+    void getSalesSummary(30)
+      .then((nextSummary) => {
+        if (!active) return;
+        setSummary(nextSummary);
+        setError(null);
+      })
+      .catch((caught: unknown) => {
+        if (!active) return;
+        setSummary(null);
+        setError(ApiError.from(caught).message);
+      })
+      .finally(() => {
+        if (active) setIsLoading(false);
+      });
+
+    return () => {
+      active = false;
+    };
+  }, []);
 
   const cards: SalesCard[] = summary
     ? [
@@ -55,7 +73,11 @@ export default function AdminDashboardPage() {
 
         <button
           type="button"
-          onClick={() => void load()}
+          onClick={() => {
+            setIsLoading(true);
+            setError(null);
+            void load();
+          }}
           disabled={isLoading}
           className="btn btn-outline px-3 py-2 text-sm"
         >
@@ -68,7 +90,11 @@ export default function AdminDashboardPage() {
           <p>{error}</p>
           <button
             type="button"
-            onClick={() => void load()}
+            onClick={() => {
+              setIsLoading(true);
+              setError(null);
+              void load();
+            }}
             className="btn btn-outline text-xs"
           >
             Retry

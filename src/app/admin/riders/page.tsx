@@ -17,11 +17,10 @@ export default function AdminRidersPage() {
   const [formError, setFormError] = useState<string | null>(null);
 
   const load = useCallback(async () => {
-    setIsLoading(true);
-    setLoadError(null);
-
     try {
-      setRiders(await listRiders());
+      const nextRiders = await listRiders();
+      setRiders(nextRiders);
+      setLoadError(null);
     } catch (caught) {
       setLoadError(ApiError.from(caught).message);
     } finally {
@@ -30,8 +29,25 @@ export default function AdminRidersPage() {
   }, []);
 
   useEffect(() => {
-    void load();
-  }, [load]);
+    let active = true;
+
+    void listRiders()
+      .then((nextRiders) => {
+        if (!active) return;
+        setRiders(nextRiders);
+        setLoadError(null);
+      })
+      .catch((caught: unknown) => {
+        if (active) setLoadError(ApiError.from(caught).message);
+      })
+      .finally(() => {
+        if (active) setIsLoading(false);
+      });
+
+    return () => {
+      active = false;
+    };
+  }, []);
 
   const handleSubmit = (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
@@ -84,7 +100,11 @@ export default function AdminRidersPage() {
 
           <button
             type="button"
-            onClick={() => void load()}
+            onClick={() => {
+              setIsLoading(true);
+              setLoadError(null);
+              void load();
+            }}
             disabled={isLoading}
             className="btn btn-outline px-3 py-2 text-sm"
           >
@@ -97,7 +117,11 @@ export default function AdminRidersPage() {
             <p>{loadError}</p>
             <button
               type="button"
-              onClick={() => void load()}
+              onClick={() => {
+                setIsLoading(true);
+                setLoadError(null);
+                void load();
+              }}
               className="btn btn-outline text-xs"
             >
               Retry

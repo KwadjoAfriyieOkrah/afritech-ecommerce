@@ -22,11 +22,10 @@ export default function AdminProductsPage() {
   const [error, setError] = useState<string | null>(null);
 
   const load = useCallback(async () => {
-    setIsLoading(true);
-    setError(null);
-
     try {
-      setProducts(await listAdminProducts());
+      const nextProducts = await listAdminProducts();
+      setProducts(nextProducts);
+      setError(null);
     } catch (caught) {
       setError(ApiError.from(caught).message);
     } finally {
@@ -35,8 +34,25 @@ export default function AdminProductsPage() {
   }, []);
 
   useEffect(() => {
-    void load();
-  }, [load]);
+    let active = true;
+
+    void listAdminProducts()
+      .then((nextProducts) => {
+        if (!active) return;
+        setProducts(nextProducts);
+        setError(null);
+      })
+      .catch((caught: unknown) => {
+        if (active) setError(ApiError.from(caught).message);
+      })
+      .finally(() => {
+        if (active) setIsLoading(false);
+      });
+
+    return () => {
+      active = false;
+    };
+  }, []);
 
   return (
     <section className="flex flex-col gap-4">
@@ -51,7 +67,11 @@ export default function AdminProductsPage() {
         <div className="flex items-center gap-2">
           <button
             type="button"
-            onClick={() => void load()}
+            onClick={() => {
+              setIsLoading(true);
+              setError(null);
+              void load();
+            }}
             disabled={isLoading}
             className="btn btn-outline px-3 py-2 text-sm"
           >
@@ -68,7 +88,11 @@ export default function AdminProductsPage() {
           <p>{error}</p>
           <button
             type="button"
-            onClick={() => void load()}
+            onClick={() => {
+              setIsLoading(true);
+              setError(null);
+              void load();
+            }}
             className="btn btn-outline text-xs"
           >
             Retry

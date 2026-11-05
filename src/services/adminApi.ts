@@ -239,6 +239,25 @@ export async function restockColor(
   );
 }
 
+export interface CreateColorResult {
+  productId: string;
+  color: AdminProductColor;
+}
+
+export async function createColor(
+  productId: string,
+  name: string,
+  stock: number
+): Promise<CreateColorResult> {
+  return unwrap(() =>
+    api.post<CreateColorResult>(
+      `/admin/products/${encodeURIComponent(productId)}/colors`,
+      { name, stock },
+      { retry: false }
+    )
+  );
+}
+
 export interface BulkRowError {
   row: number;
   errors: Array<{ field: string; message: string }>;

@@ -36,26 +36,53 @@ const STATUS_BADGES: Record<AdminFulfillmentStatus, string> = {
 
 export default function AdminOrdersPage() {
   const [filter, setFilter] = useState<OrderFilter>('ALL');
-  const [orders, setOrders] = useState<AdminOrderListItem[]>([]);
-  const [isLoading, setIsLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
+  const [result, setResult] = useState<{
+    filter: OrderFilter;
+    orders: AdminOrderListItem[];
+    error: string | null;
+  } | null>(null);
+  const [isRefreshing, setIsRefreshing] = useState(false);
+  const orders = result?.filter === filter ? result.orders : [];
+  const error = result?.filter === filter ? result.error : null;
+  const isLoading = isRefreshing || result?.filter !== filter;
 
   const load = useCallback(async () => {
-    setIsLoading(true);
-    setError(null);
-
     try {
-      setOrders(await listAdminOrders(filter === 'ALL' ? undefined : filter));
+      const nextOrders = await listAdminOrders(filter === 'ALL' ? undefined : filter);
+      setResult({ filter, orders: nextOrders, error: null });
     } catch (caught) {
-      setError(ApiError.from(caught).message);
+      setResult({
+        filter,
+        orders: [],
+        error: ApiError.from(caught).message,
+      });
     } finally {
-      setIsLoading(false);
+      setIsRefreshing(false);
     }
   }, [filter]);
 
   useEffect(() => {
-    void load();
-  }, [load]);
+    let active = true;
+
+    void listAdminOrders(filter === 'ALL' ? undefined : filter)
+      .then((nextOrders) => {
+        if (!active) return;
+        setResult({ filter, orders: nextOrders, error: null });
+      })
+      .catch((caught: unknown) => {
+        if (active) {
+          setResult({
+            filter,
+            orders: [],
+            error: ApiError.from(caught).message,
+          });
+        }
+      })
+
+    return () => {
+      active = false;
+    };
+  }, [filter]);
 
   return (
     <section className="flex flex-col gap-4">
@@ -67,7 +94,10 @@ export default function AdminOrdersPage() {
 
         <button
           type="button"
-          onClick={() => void load()}
+          onClick={() => {
+            setIsRefreshing(true);
+            void load();
+          }}
           disabled={isLoading}
           className="btn btn-outline px-3 py-2 text-sm"
         >
@@ -96,7 +126,10 @@ export default function AdminOrdersPage() {
           <p>{error}</p>
           <button
             type="button"
-            onClick={() => void load()}
+            onClick={() => {
+              setIsRefreshing(true);
+              void load();
+            }}
             className="btn btn-outline text-xs"
           >
             Retry

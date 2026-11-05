@@ -1,7 +1,7 @@
 'use client';
 
 import Link from 'next/link';
-import { useState, type ChangeEvent } from 'react';
+import { useRef, useState, type ChangeEvent } from 'react';
 import { ApiError } from '@/services/api';
 import {
   bulkImportProducts,
@@ -34,6 +34,7 @@ function SummaryPanel({ summary }: { summary: BulkSummary }) {
 }
 
 export default function AdminBulkUploadPage() {
+  const fileInputRef = useRef<HTMLInputElement>(null);
   const [file, setFile] = useState<File | null>(null);
   const [preview, setPreview] = useState<BulkImportResult | null>(null);
   const [result, setResult] = useState<BulkImportResult | null>(null);
@@ -49,6 +50,7 @@ export default function AdminBulkUploadPage() {
     setPreview(null);
     setResult(null);
     setError(null);
+    event.target.value = '';
   };
 
   const handlePreview = async (): Promise<void> => {
@@ -114,19 +116,25 @@ export default function AdminBulkUploadPage() {
       </div>
 
       <div className="card flex flex-col gap-4 p-5 sm:p-6">
-        <div>
-          <label htmlFor="csv-file" className="label">
-            CSV file
-          </label>
+        <div className="flex flex-col gap-2">
+          <span className="label">CSV file</span>
           <input
+            ref={fileInputRef}
             id="csv-file"
             type="file"
             accept=".csv,text/csv"
             onChange={handleFileChange}
-            disabled={isBusy}
-            className="block w-full text-sm text-stone-600"
+            className="hidden"
+            tabIndex={-1}
           />
-          {file && <p className="mt-2 text-sm text-stone-500">Selected: {file.name}</p>}
+          <button
+            type="button"
+            onClick={() => fileInputRef.current?.click()}
+            className="btn btn-outline w-fit px-3 py-2 text-sm"
+          >
+            Choose CSV file
+          </button>
+          {file && <p className="text-sm text-stone-500">Selected: {file.name}</p>}
         </div>
 
         <div className="flex flex-wrap items-center gap-2">

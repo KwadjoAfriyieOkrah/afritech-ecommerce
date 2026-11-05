@@ -18,36 +18,50 @@ export default function EditAdminProductPage() {
   const productId = typeof params?.id === 'string' ? params.id : '';
 
   const [product, setProduct] = useState<AdminProduct | null>(null);
-  const [isLoading, setIsLoading] = useState(true);
+  const [isLoadingState, setIsLoadingState] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const isLoading = Boolean(productId) && isLoadingState;
 
   const load = useCallback(async () => {
-    if (!productId) {
-      setProduct(null);
-      setError('Product not found');
-      setIsLoading(false);
-      return;
-    }
-
-    setIsLoading(true);
-    setError(null);
+    if (!productId) return;
 
     try {
       const products = await listAdminProducts();
       const match = products.find((item) => item.id === productId) ?? null;
       setProduct(match);
-      if (!match) setError('Product not found');
+      setError(match ? null : 'Product not found');
     } catch (caught) {
       setProduct(null);
       setError(ApiError.from(caught).message);
     } finally {
-      setIsLoading(false);
+      setIsLoadingState(false);
     }
   }, [productId]);
 
   useEffect(() => {
-    void load();
-  }, [load]);
+    let active = true;
+    if (productId) {
+      void listAdminProducts()
+        .then((products) => {
+          if (!active) return;
+          const match = products.find((item) => item.id === productId) ?? null;
+          setProduct(match);
+          setError(match ? null : 'Product not found');
+        })
+        .catch((caught: unknown) => {
+          if (!active) return;
+          setProduct(null);
+          setError(ApiError.from(caught).message);
+        })
+        .finally(() => {
+          if (active) setIsLoadingState(false);
+        });
+    }
+
+    return () => {
+      active = false;
+    };
+  }, [productId]);
 
   const handleColorsChange = useCallback(
     (colors: AdminProductColor[]): void => {
@@ -75,7 +89,11 @@ export default function EditAdminProductPage() {
           <p>{error ?? 'Product not found'}</p>
           <button
             type="button"
-            onClick={() => void load()}
+            onClick={() => {
+              setIsLoadingState(true);
+              setError(null);
+              void load();
+            }}
             className="btn btn-outline text-xs"
           >
             Retry

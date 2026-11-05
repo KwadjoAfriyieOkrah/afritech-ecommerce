@@ -53,48 +53,63 @@ export default function AdminOrderDetailPage() {
   const [order, setOrder] = useState<AdminOrderDetail | null>(null);
   const [riders, setRiders] = useState<AdminRider[]>([]);
   const [selectedRiderId, setSelectedRiderId] = useState('');
-  const [isLoading, setIsLoading] = useState(true);
+  const [isLoadingState, setIsLoadingState] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [ridersError, setRidersError] = useState<string | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
   const [busyAction, setBusyAction] = useState<Action | null>(null);
+  const isLoading = Boolean(orderId) && isLoadingState;
 
   const loadOrder = useCallback(async () => {
-    if (!orderId) {
-      setIsLoading(false);
-      setError('Order not found');
-      return;
-    }
-
-    setIsLoading(true);
-    setError(null);
+    if (!orderId) return;
 
     try {
       const next = await getAdminOrder(orderId);
       setOrder(next);
       setSelectedRiderId(next.riderId ?? '');
+      setError(null);
     } catch (caught) {
       setOrder(null);
       setError(ApiError.from(caught).message);
     } finally {
-      setIsLoading(false);
+      setIsLoadingState(false);
     }
   }, [orderId]);
 
-  const loadRiders = useCallback(async () => {
-    setRidersError(null);
-
-    try {
-      setRiders(await listRiders());
-    } catch (caught) {
-      setRidersError(ApiError.from(caught).message);
-    }
-  }, []);
-
   useEffect(() => {
-    void loadOrder();
-    void loadRiders();
-  }, [loadOrder, loadRiders]);
+    let active = true;
+    if (orderId) {
+      void getAdminOrder(orderId)
+        .then((next) => {
+          if (!active) return;
+          setOrder(next);
+          setSelectedRiderId(next.riderId ?? '');
+          setError(null);
+        })
+        .catch((caught: unknown) => {
+          if (!active) return;
+          setOrder(null);
+          setError(ApiError.from(caught).message);
+        })
+        .finally(() => {
+          if (active) setIsLoadingState(false);
+        });
+    }
+
+    void listRiders()
+      .then((nextRiders) => {
+        if (!active) return;
+        setRiders(nextRiders);
+        setRidersError(null);
+      })
+      .catch((caught: unknown) => {
+        if (active) setRidersError(ApiError.from(caught).message);
+      });
+
+    return () => {
+      active = false;
+    };
+  }, [orderId]);
 
   const refreshOrder = useCallback(async () => {
     if (!orderId) return;
@@ -138,7 +153,15 @@ export default function AdminOrderDetailPage() {
       <div className="flex flex-col gap-4">
         <div role="alert" className="alert-error flex flex-wrap items-center justify-between gap-3">
           <p>{error ?? 'Order not found'}</p>
-          <button type="button" onClick={() => void loadOrder()} className="btn btn-outline text-xs">
+          <button
+            type="button"
+            onClick={() => {
+              setIsLoadingState(true);
+              setError(null);
+              void loadOrder();
+            }}
+            className="btn btn-outline text-xs"
+          >
             Retry
           </button>
         </div>

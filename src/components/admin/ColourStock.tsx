@@ -1,8 +1,9 @@
 'use client';
 
-import { useState, type ChangeEvent } from 'react';
+import { useState, type ChangeEvent, type FormEvent } from 'react';
 import { ApiError } from '@/services/api';
 import {
+  createColor,
   restockColor,
   type AdminProductColor
 } from '@/services/adminApi';
@@ -20,6 +21,9 @@ export function ColourStock({
 }: ColourStockProps) {
   const [quantities, setQuantities] = useState<Record<string, string>>({});
   const [busyColorId, setBusyColorId] = useState<string | null>(null);
+  const [newName, setNewName] = useState('');
+  const [newStock, setNewStock] = useState('0');
+  const [isCreating, setIsCreating] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   const handleQuantityChange = (
@@ -58,6 +62,36 @@ export function ColourStock({
     }
   };
 
+  const handleCreateColor = async (
+    event: FormEvent<HTMLFormElement>
+  ): Promise<void> => {
+    event.preventDefault();
+    if (isCreating) return;
+
+    const name = newName.trim();
+    const stock = Number(newStock);
+    if (name === '' || !Number.isInteger(stock) || stock < 0) {
+      setError('Enter a colour name and a whole starting stock of 0 or more.');
+      return;
+    }
+
+    setError(null);
+    setIsCreating(true);
+
+    try {
+      const result = await createColor(productId, name, stock);
+      onColorsChange(
+        [...colors, result.color].sort((a, b) => a.name.localeCompare(b.name))
+      );
+      setNewName('');
+      setNewStock('0');
+    } catch (caught) {
+      setError(ApiError.from(caught).message);
+    } finally {
+      setIsCreating(false);
+    }
+  };
+
   return (
     <section className="card flex flex-col gap-4 p-5 sm:p-6">
       <div>
@@ -72,6 +106,50 @@ export function ColourStock({
           <p>{error}</p>
         </div>
       )}
+
+      <form
+        onSubmit={(event) => void handleCreateColor(event)}
+        className="flex flex-col gap-3 rounded-lg border border-stone-200 p-3 sm:flex-row sm:items-end"
+      >
+        <div className="flex-1">
+          <label htmlFor="new-colour-name" className="label">
+            Colour name
+          </label>
+          <input
+            id="new-colour-name"
+            type="text"
+            maxLength={40}
+            value={newName}
+            onChange={(event) => setNewName(event.target.value)}
+            disabled={isCreating}
+            className="input"
+          />
+        </div>
+
+        <div>
+          <label htmlFor="new-colour-stock" className="label">
+            Starting stock
+          </label>
+          <input
+            id="new-colour-stock"
+            type="number"
+            min="0"
+            step="1"
+            value={newStock}
+            onChange={(event) => setNewStock(event.target.value)}
+            disabled={isCreating}
+            className="input w-28"
+          />
+        </div>
+
+        <button
+          type="submit"
+          disabled={isCreating}
+          className="btn btn-primary px-3 py-2 text-sm"
+        >
+          {isCreating ? 'Adding...' : 'Add colour'}
+        </button>
+      </form>
 
       {colors.length === 0 ? (
         <p className="text-sm text-stone-500">
