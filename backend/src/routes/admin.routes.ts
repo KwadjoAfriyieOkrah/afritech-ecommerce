@@ -1,4 +1,4 @@
-import { Role } from "@prisma/client";
+import { Role } from "../generated/prisma/client";
 import {
   type NextFunction,
   type Request,
@@ -21,6 +21,7 @@ import {
 import {
   addProductImageHandler,
   bulkImportProductsHandler,
+  createColorHandler,
   createProductHandler,
   getSalesSummaryHandler,
   listAllProductsHandler,
@@ -134,6 +135,8 @@ router.post("/products", createProductHandler);
 router.patch("/products/:id", updateProductHandler);
 
 router.delete("/products/:id/images/:index", removeProductImageHandler);
+
+router.post("/products/:id/colors", createColorHandler);
 
 router.post(
   "/products/:id/colors/:colorId/restock",

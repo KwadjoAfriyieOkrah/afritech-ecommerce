@@ -3,6 +3,7 @@ import type { ZodError } from "zod";
 
 import { UNAUTHORIZED_MESSAGE } from "../middleware/requireAuth";
 import {
+  ColourExistsError,
   CsvParseError,
   ImageLimitError,
   ProductNotFoundError,
@@ -10,6 +11,7 @@ import {
   StockConflictError,
   UnsupportedImageError,
   addProductImage,
+  createColor,
   createProduct,
   getAdminSalesSummary,
   listAllProducts,
@@ -24,6 +26,7 @@ import {
 import {
   MAX_BULK_ROWS,
   MAX_PRODUCT_IMAGES,
+  colorCreateSchema,
   productIdSchema,
   productInputSchema,
   productPatchSchema,
@@ -421,5 +424,46 @@ export async function restockColorHandler(
     }
     console.error("Failed to restock colour:", error);
     res.status(500).json({ error: "Could not restock the colour" });
+  }
+}
+
+export async function createColorHandler(
+  req: Request,
+  res: Response,
+): Promise<void> {
+  const user = req.authUser;
+  if (!user) {
+    res.status(401).json({ error: UNAUTHORIZED_MESSAGE });
+    return;
+  }
+
+  const idResult = productIdSchema.safeParse(req.params.id);
+  if (!idResult.success) {
+    res.status(404).json(PRODUCT_NOT_FOUND_BODY);
+    return;
+  }
+
+  const parsed = colorCreateSchema.safeParse(req.body);
+  if (!parsed.success) {
+    res.status(400).json(validationBody(parsed.error));
+    return;
+  }
+
+  try {
+    const result = await createColor(idResult.data, parsed.data, user.id);
+    res.status(201).json(result);
+  } catch (error) {
+    if (error instanceof ProductNotFoundError) {
+      res.status(404).json(PRODUCT_NOT_FOUND_BODY);
+      return;
+    }
+    if (error instanceof ColourExistsError) {
+      res.status(409).json({
+        error: "That colour already exists for this product.",
+      });
+      return;
+    }
+    console.error("Failed to create colour:", error);
+    res.status(500).json({ error: "Could not create the colour" });
   }
 }

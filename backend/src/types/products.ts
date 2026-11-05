@@ -7,6 +7,8 @@ export type ProductResponse = {
   colors: string[];
   image: string | null;
   soldOut: boolean;
+  description: string | null;
+  specs: Record<string, string> | null;
 };
 
 export type AvailabilityStatus = "ok" | "insufficient" | "unavailable";

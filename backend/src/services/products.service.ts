@@ -1,4 +1,4 @@
-import { Prisma, ProductCategory } from "@prisma/client";
+import { Prisma, ProductCategory } from "../generated/prisma/client";
 
 import { prisma } from "../lib/prisma";
 import type {
@@ -8,8 +8,8 @@ import type {
 } from "../types/products";
 import type { AvailabilityLineInput } from "../validation/products.schemas";
 
-// Storefront catalogue. Only public fields are selected: never description,
-// specs, timestamps, or any sensitive data.
+// Storefront catalogue. Only public fields are selected; no sensitive data is
+// included.
 const CATEGORY_LABELS: Record<ProductCategory, string> = {
   IPHONE: "iPhone",
   SAMSUNG: "Samsung",
@@ -20,6 +20,22 @@ function isProductCategory(value: string): value is ProductCategory {
   return Object.prototype.hasOwnProperty.call(CATEGORY_LABELS, value);
 }
 
+function productSpecs(value: Prisma.JsonValue | null): Record<string, string> | null {
+  if (value === null) return null;
+  if (typeof value !== "object" || Array.isArray(value)) {
+    throw new Error("Stored product specs are not an object");
+  }
+
+  const specs: Record<string, string> = {};
+  for (const [key, specValue] of Object.entries(value)) {
+    if (typeof specValue !== "string") {
+      throw new Error("Stored product specs contain a non-string value");
+    }
+    specs[key] = specValue;
+  }
+  return specs;
+}
+
 export async function listActiveProducts(): Promise<ProductResponse[]> {
   const products = await prisma.product.findMany({
     where: { isActive: true },
@@ -28,6 +44,8 @@ export async function listActiveProducts(): Promise<ProductResponse[]> {
       id: true,
       name: true,
       category: true,
+      description: true,
+      specs: true,
       basePrice: true,
       images: true,
       colors: {
@@ -55,6 +73,8 @@ export async function listActiveProducts(): Promise<ProductResponse[]> {
       colors: product.colors.map((color) => color.name),
       image: product.images[0] ?? null,
       soldOut: stock === 0,
+      description: product.description,
+      specs: productSpecs(product.specs),
     };
   });
 }

@@ -1,4 +1,4 @@
-import { ProductCategory } from "@prisma/client";
+import { ProductCategory } from "../generated/prisma/client";
 import { z } from "zod";
 
 export const MAX_PRODUCT_IMAGES = 6;
@@ -81,39 +81,37 @@ function specText(maxLength: number): z.ZodString {
     .max(maxLength, `Must be at most ${maxLength} characters`);
 }
 
-const iphoneSpecsSchema = z
-  .object({
-    storage: iphoneStorageSchema,
-    colour: specText(40),
-    chip: specText(60),
-    camera: specText(120),
-    screenSize: specText(20),
-    battery: specText(60),
-  })
-  .strict();
+const iphoneSpecFields = z.object({
+  storage: iphoneStorageSchema,
+  colour: specText(40),
+  chip: specText(60),
+  camera: specText(120),
+  screenSize: specText(20),
+  battery: specText(60),
+});
 
-const samsungSpecsSchema = z
-  .object({
-    storage: iphoneStorageSchema,
-    colour: specText(40),
-    ram: samsungRamSchema,
-    camera: specText(120),
-    screenSize: specText(20),
-    battery: specText(60),
-  })
-  .strict();
+const samsungSpecFields = z.object({
+  storage: iphoneStorageSchema,
+  colour: specText(40),
+  ram: samsungRamSchema,
+  camera: specText(120),
+  screenSize: specText(20),
+  battery: specText(60),
+});
 
-const laptopSpecsSchema = z
-  .object({
-    colour: specText(40),
-    processor: specText(80),
-    ram: laptopRamSchema,
-    storage: laptopStorageSchema,
-    screenSize: specText(20),
-    graphics: specText(80),
-    batteryLife: specText(40),
-  })
-  .strict();
+const laptopSpecFields = z.object({
+  colour: specText(40),
+  processor: specText(80),
+  ram: laptopRamSchema,
+  storage: laptopStorageSchema,
+  screenSize: specText(20),
+  graphics: specText(80),
+  batteryLife: specText(40),
+});
+
+const iphoneSpecsSchema = iphoneSpecFields.strict();
+const samsungSpecsSchema = samsungSpecFields.strict();
+const laptopSpecsSchema = laptopSpecFields.strict();
 
 export type ProductSpecs =
   | z.infer<typeof iphoneSpecsSchema>
@@ -124,21 +122,46 @@ export type SpecValidationResult =
   | { success: true; data: ProductSpecs | null }
   | { success: false; field: string; message: string };
 
+export type PartialSpecValidationResult =
+  | { success: true; data: Partial<ProductSpecs> | null }
+  | { success: false; field: string; message: string };
+
 const SPEC_SCHEMAS: Record<ProductCategory, z.ZodType<ProductSpecs>> = {
   [ProductCategory.IPHONE]: iphoneSpecsSchema,
   [ProductCategory.SAMSUNG]: samsungSpecsSchema,
   [ProductCategory.LAPTOP]: laptopSpecsSchema,
 };
 
+const PARTIAL_SPEC_SCHEMAS: Record<
+  ProductCategory,
+  z.ZodType<Partial<ProductSpecs>>
+> = {
+  [ProductCategory.IPHONE]: iphoneSpecFields.partial().strict(),
+  [ProductCategory.SAMSUNG]: samsungSpecFields.partial().strict(),
+  [ProductCategory.LAPTOP]: laptopSpecFields.partial().strict(),
+};
+
 export function validateSpecs(
   category: ProductCategory,
   specs: unknown,
-): SpecValidationResult {
+): SpecValidationResult;
+export function validateSpecs(
+  category: ProductCategory,
+  specs: unknown,
+  allowPartial: true,
+): PartialSpecValidationResult;
+export function validateSpecs(
+  category: ProductCategory,
+  specs: unknown,
+  allowPartial = false,
+): SpecValidationResult | PartialSpecValidationResult {
   if (specs === null) {
     return { success: true, data: null };
   }
 
-  const parsed = SPEC_SCHEMAS[category].safeParse(specs);
+  const parsed = allowPartial
+    ? PARTIAL_SPEC_SCHEMAS[category].safeParse(specs)
+    : SPEC_SCHEMAS[category].safeParse(specs);
   if (!parsed.success) {
     const issue = parsed.error.issues[0];
     let field = "specs";
@@ -182,6 +205,8 @@ const colorEntrySchema = z.object({
     .int("Stock must be a whole number")
     .min(0, "Stock cannot be negative"),
 });
+
+export const colorCreateSchema = colorEntrySchema;
 
 // Accepts both shapes the single-product routes and the bulk CSV produce:
 // [{ name, stock }] or the CSV cell "Name:stock|Name:stock".
@@ -268,6 +293,8 @@ const productFields = {
   colors: colorsSchema,
 };
 
+const csvSpecValueSchema = z.string().trim().optional();
+
 // One field set drives both the single-product routes and every bulk row, so
 // a row can never be accepted under weaker rules than a single write.
 export const productInputSchema = z
@@ -301,6 +328,16 @@ export const productInputSchema = z
 export const bulkProductRowSchema = z.object({
   id: productIdSchema.optional(),
   ...productFields,
+  storage: csvSpecValueSchema,
+  ram: csvSpecValueSchema,
+  chip: csvSpecValueSchema,
+  camera: csvSpecValueSchema,
+  screenSize: csvSpecValueSchema,
+  battery: csvSpecValueSchema,
+  processor: csvSpecValueSchema,
+  graphics: csvSpecValueSchema,
+  batteryLife: csvSpecValueSchema,
+  colour: csvSpecValueSchema,
 });
 
 // A patch may touch any subset of the product fields but an empty body would
@@ -356,6 +393,7 @@ export const productAvailabilitySchema = z
   .strict();
 
 export type ProductInput = z.infer<typeof productInputSchema>;
+export type ColorCreateInput = z.infer<typeof colorCreateSchema>;
 export type BulkProductRow = z.infer<typeof bulkProductRowSchema>;
 export type ProductPatch = z.infer<typeof productPatchSchema>;
 export type RestockInput = z.infer<typeof restockInputSchema>;

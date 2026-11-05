@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
 import type { Server } from "node:http";
 import bcrypt from "bcryptjs";
-import { Prisma, Role } from "@prisma/client";
+import { Prisma, Role } from "../src/generated/prisma/client";
 import { after, before, test } from "node:test";
 
 // ---------------------------------------------------------------------------
@@ -337,6 +337,34 @@ test("d. POST /admin/products 201, admin GET lists it, public GET /products show
 });
 
 // ---------------------------------------------------------------------------
+test("d2. public GET /products returns a created product's description and specs", async () => {
+  const specs = {
+    storage: "256GB",
+    colour: "Deep Purple",
+    chip: "A17 Pro",
+    camera: "48MP wide",
+    screenSize: "6.1 inch",
+    battery: "Up to 23 hours",
+  };
+  const created = await createProductOverHttp(uniqueName("Public Specs"), {
+    specs,
+    colors: [{ name: "Deep Purple", stock: 1 }],
+  });
+  assert.equal(created.status, 201);
+  const id = stringField(created.body, "id");
+  assert.ok(id !== null);
+
+  const result = await request("/products", { method: "GET" });
+  assert.equal(result.status, 200);
+  const listed = arrayOf(result.body).find(
+    (item) => stringField(item, "id") === id,
+  );
+  assert.ok(listed !== undefined, "public list must contain the product");
+  assert.equal(stringField(listed, "description"), "HTTP fixture product");
+  assert.deepEqual(field(listed, "specs"), specs);
+});
+
+// ---------------------------------------------------------------------------
 test("p. restock 3 on the zero-stock product makes GET /products report soldOut false", async () => {
   assert.ok(zeroStockProductId !== "", "test d must create the product");
   assert.ok(zeroStockColorId !== "", "test d must create the colour");
@@ -646,6 +674,91 @@ test("o. POST /admin/products/bulk dry run returns 200 and writes nothing", asyn
 });
 
 // ---------------------------------------------------------------------------
+test("o2. bulk CSV accepts iPhone 256GB storage and reports row 2 for invalid 64GB", async () => {
+  const headers = [
+    "id",
+    "name",
+    "brand",
+    "category",
+    "description",
+    "basePrice",
+    "isActive",
+    "colors",
+    "storage",
+    "ram",
+    "chip",
+    "camera",
+    "screenSize",
+    "battery",
+    "processor",
+    "graphics",
+    "batteryLife",
+    "colour",
+  ];
+  const validRow = [
+    "",
+    uniqueName("Bulk iPhone 256GB"),
+    "TestBrand",
+    "IPHONE",
+    "Valid storage",
+    "99.00",
+    "true",
+    "Black:4",
+    "256GB",
+    "",
+    "",
+    "",
+    "",
+    "",
+    "",
+    "",
+    "",
+    "",
+  ];
+  const invalidRow = [
+    "",
+    uniqueName("Bulk iPhone 64GB"),
+    "TestBrand",
+    "IPHONE",
+    "Invalid storage",
+    "99.00",
+    "true",
+    "Black:4",
+    "64GB",
+    "",
+    "",
+    "",
+    "",
+    "",
+    "",
+    "",
+    "",
+    "",
+  ];
+  const csv = [headers.join(","), validRow.join(","), invalidRow.join(",")].join(
+    "\r\n",
+  );
+  const form = new FormData();
+  form.append("file", new Blob([csv], { type: "text/csv" }), "products.csv");
+
+  const result = await request(
+    "/admin/products/bulk",
+    { method: "POST", body: form },
+    adminToken,
+  );
+  assert.equal(result.status, 400);
+  const summary = field(result.body, "summary");
+  assert.equal(numberField(summary, "validRows"), 1);
+  assert.equal(numberField(summary, "invalidRows"), 1);
+
+  const errors = arrayOf(field(result.body, "errors"));
+  assert.equal(errors.length, 1);
+  assert.equal(numberField(errors[0], "row"), 2);
+  const rowErrors = arrayOf(field(errors[0], "errors"));
+  assert.equal(stringField(rowErrors[0], "field"), "storage");
+});
+
+// ---------------------------------------------------------------------------
 test("q. POST /admin/products stores validated iPhone specs exactly as sent", async () => {
   const specs = {
     storage: "256GB",
@@ -930,6 +1043,26 @@ test("z2. POST /admin/products with duplicate colour names returns 400 naming co
 });
 
 // ---------------------------------------------------------------------------
+test("aa. GET /products returns the description for a product that has one", async () => {
+  const description = `Public description ${suffix}`;
+  const created = await createProductOverHttp(
+    uniqueName("Description Fixture"),
+    { description },
+  );
+  assert.equal(created.status, 201);
+  const id = stringField(created.body, "id");
+  assert.ok(id !== null);
+
+  const publicList = await request("/products", { method: "GET" });
+  assert.equal(publicList.status, 200);
+  const listed = arrayOf(publicList.body).find(
+    (item) => stringField(item, "id") === id,
+  );
+  assert.ok(listed !== undefined, "product must be in the public list");
+  assert.equal(stringField(listed, "description"), description);
+});
+
+// ---------------------------------------------------------------------------
 test("z3. POST /admin/products with a laptop colour that differs from the spec returns 400 naming colors", async () => {
   const result = await createProductOverHttp(uniqueName("Laptop Colour Mismatch"), {
     category: "LAPTOP",
@@ -948,4 +1081,85 @@ test("z3. POST /admin/products with a laptop colour that differs from the spec r
   const message = stringField(result.body, "error");
   assert.ok(message !== null, "400 body must carry an error message");
   assert.ok(message.startsWith("colors"), `unexpected message: ${message}`);
+});
+
+// ---------------------------------------------------------------------------
+test("ab. POST /admin/products/:id/colors creates a colour with stock 5 and GET /products reports stock 5", async () => {
+  const created = await createProductOverHttp(uniqueName("Add Colour"), {
+    colors: [{ name: "Black", stock: 0 }],
+  });
+  assert.equal(created.status, 201);
+  const productId = stringField(created.body, "id");
+  assert.ok(productId !== null);
+
+  const result = await requestJson(
+    "POST",
+    `/admin/products/${productId}/colors`,
+    { name: "Blue", stock: 5 },
+    adminToken,
+  );
+  assert.equal(result.status, 201);
+  const color = field(result.body, "color");
+  const colorId = stringField(color, "id");
+  assert.ok(colorId !== null);
+  assert.equal(stringField(color, "name"), "Blue");
+  assert.equal(numberField(color, "stock"), 5);
+  assert.equal(stringField(result.body, "productId"), productId);
+
+  const publicList = await request("/products", { method: "GET" });
+  assert.equal(publicList.status, 200);
+  const listed = arrayOf(publicList.body).find(
+    (item) => stringField(item, "id") === productId,
+  );
+  assert.ok(listed !== undefined, "product must be in the public list");
+  assert.equal(numberField(listed, "stock"), 5);
+
+  const log = await prisma.adminLog.findFirst({
+    where: { action: "COLOUR_CREATE", entityId: colorId },
+    select: { entity: true, meta: true },
+  });
+  assert.ok(log !== null, "AdminLog row must exist for the new colour");
+  assert.equal(log.entity, "Color");
+  assert.equal(field(log.meta, "name"), "Blue");
+  assert.equal(field(log.meta, "stock"), 5);
+});
+
+// ---------------------------------------------------------------------------
+test("ac. POST /admin/products/:id/colors with a duplicate name returns 409", async () => {
+  const created = await createProductOverHttp(uniqueName("Duplicate Add Colour"));
+  assert.equal(created.status, 201);
+  const productId = stringField(created.body, "id");
+  assert.ok(productId !== null);
+
+  const result = await requestJson(
+    "POST",
+    `/admin/products/${productId}/colors`,
+    { name: "Black", stock: 2 },
+    adminToken,
+  );
+  assert.equal(result.status, 409);
+  assert.equal(
+    stringField(result.body, "error"),
+    "That colour already exists for this product.",
+  );
+
+  const count = await prisma.color.count({ where: { productId, name: "Black" } });
+  assert.equal(count, 1, "duplicate colour must not be created");
+});
+
+// ---------------------------------------------------------------------------
+test("ad. POST /admin/products/:id/colors with a CUSTOMER token returns 403", async () => {
+  const created = await createProductOverHttp(uniqueName("Customer Add Colour"));
+  assert.equal(created.status, 201);
+  const productId = stringField(created.body, "id");
+  assert.ok(productId !== null);
+
+  const result = await requestJson(
+    "POST",
+    `/admin/products/${productId}/colors`,
+    { name: "Green", stock: 1 },
+    customerToken,
+  );
+  assert.equal(result.status, 403);
+  assert.equal(stringField(result.body, "error"), "Forbidden");
 });

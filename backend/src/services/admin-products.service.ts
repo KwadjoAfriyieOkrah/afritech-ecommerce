@@ -1,4 +1,8 @@
-import { InventoryReason, Prisma, type ProductCategory } from "@prisma/client";
+import {
+  InventoryReason,
+  Prisma,
+  type ProductCategory,
+} from "../generated/prisma/client";
 import { parse } from "csv-parse/sync";
 
 import { CLOUDINARY_UPLOAD_FOLDER, getCloudinaryClient } from "../lib/cloudinary";
@@ -9,8 +13,10 @@ import {
   toProductValidationDetails,
   validateSpecs,
   type BulkProductRow,
+  type ColorCreateInput,
   type ProductInput,
   type ProductPatch,
+  type ProductSpecs,
   type ValidationDetail,
 } from "../validation/products.schemas";
 
@@ -21,6 +27,7 @@ export const PRODUCT_BULK_UPDATE_ACTION = "PRODUCT_BULK_UPDATE";
 export const PRODUCT_CREATE_ACTION = "PRODUCT_CREATE";
 export const PRODUCT_UPDATE_ACTION = "PRODUCT_UPDATE";
 export const COLOR_RESTOCK_ACTION = "COLOR_RESTOCK";
+export const COLOUR_CREATE_ACTION = "COLOUR_CREATE";
 
 const PRODUCT_ENTITY = "Product";
 const COLOR_ENTITY = "Color";
@@ -28,12 +35,14 @@ const ADJUSTMENT_NOTE_BULK_IMPORT = "Bulk import";
 const ADJUSTMENT_NOTE_BULK_EDIT = "Bulk edit";
 const ADJUSTMENT_NOTE_CREATE = "Product created";
 const ADJUSTMENT_NOTE_PATCH = "Product updated";
+const ADJUSTMENT_NOTE_COLOUR_CREATE = "Colour created";
 
 export class UnsupportedImageError extends Error {}
 export class ProductNotFoundError extends Error {}
 export class ImageLimitError extends Error {}
 export class CsvParseError extends Error {}
 export class StockConflictError extends Error {}
+export class ColourExistsError extends Error {}
 
 export class SpecValidationError extends Error {
   readonly field: string;
@@ -280,7 +289,24 @@ export async function removeProductImage(
 
 export type CsvRow = Record<string, string>;
 
-const OPTIONAL_CSV_FIELDS = new Set(["id", "description", "isActive"]);
+const CSV_SPEC_FIELDS: readonly string[] = [
+  "storage",
+  "ram",
+  "chip",
+  "camera",
+  "screenSize",
+  "battery",
+  "processor",
+  "graphics",
+  "batteryLife",
+  "colour",
+];
+const OPTIONAL_CSV_FIELDS = new Set([
+  "id",
+  "description",
+  "isActive",
+  ...CSV_SPEC_FIELDS,
+]);
 
 function isStringRecord(value: unknown): value is CsvRow {
   if (typeof value !== "object" || value === null || Array.isArray(value)) {
@@ -356,6 +382,18 @@ interface PlannedRow {
   row: number;
   id: string | undefined;
   data: BulkProductRow;
+  specs: Partial<ProductSpecs> | undefined;
+}
+
+function csvSpecsFromRow(row: BulkProductRow): Record<string, string> | undefined {
+  const specs: Record<string, string> = {};
+  for (const field of CSV_SPEC_FIELDS) {
+    const value: unknown = Reflect.get(row, field);
+    if (typeof value === "string" && value.trim() !== "") {
+      specs[field] = value.trim();
+    }
+  }
+  return Object.keys(specs).length > 0 ? specs : undefined;
 }
 
 function emptySummary(totalRows: number): BulkSummary {
@@ -393,6 +431,7 @@ async function commitPlannedRows(
           basePrice: new Prisma.Decimal(item.data.basePrice),
           isActive: item.data.isActive ?? true,
           images: [],
+          ...(item.specs !== undefined ? { specs: item.specs } : {}),
           colors: {
             create: item.data.colors.map((color) => ({
               name: color.name,
@@ -433,6 +472,8 @@ async function commitPlannedRows(
       where: { id: item.id },
       select: {
         id: true,
+        category: true,
+        specs: true,
         colors: { select: { id: true, name: true, stock: true } },
       },
     });
@@ -440,6 +481,24 @@ async function commitPlannedRows(
       throw new BulkRowError(item.row, [
         { field: "id", message: "Product not found" },
       ]);
+    }
+
+    let nextSpecs = item.specs;
+    if (nextSpecs !== undefined && existing.category === item.data.category) {
+      const currentSpecs = isStringRecord(existing.specs)
+        ? existing.specs
+        : {};
+      const merged = validateSpecs(
+        item.data.category,
+        { ...currentSpecs, ...nextSpecs },
+        true,
+      );
+      if (!merged.success) {
+        throw new BulkRowError(item.row, [
+          { field: merged.field, message: merged.message },
+        ]);
+      }
+      nextSpecs = merged.data ?? undefined;
     }
 
     await tx.product.update({
@@ -455,6 +514,7 @@ async function commitPlannedRows(
         ...(item.data.isActive !== undefined
           ? { isActive: item.data.isActive }
           : {}),
+        ...(nextSpecs !== undefined ? { specs: nextSpecs } : {}),
       },
     });
 
@@ -549,7 +609,31 @@ export async function runBulkProductImport(params: {
       });
       continue;
     }
-    planned.push({ row: rowNumber, id: parsed.data.id, data: parsed.data });
+
+    const suppliedSpecs = csvSpecsFromRow(parsed.data);
+    let specs: Partial<ProductSpecs> | undefined;
+    if (suppliedSpecs !== undefined) {
+      const validation = validateSpecs(
+        parsed.data.category,
+        suppliedSpecs,
+        true,
+      );
+      if (!validation.success) {
+        errors.push({
+          row: rowNumber,
+          errors: [{ field: validation.field, message: validation.message }],
+        });
+        continue;
+      }
+      specs = validation.data ?? undefined;
+    }
+
+    planned.push({
+      row: rowNumber,
+      id: parsed.data.id,
+      data: parsed.data,
+      specs,
+    });
   }
 
   const seenIds = new Map<string, number>();
@@ -1006,6 +1090,81 @@ export async function restockColor(
     });
 
     return { productId, color: updated };
+  });
+}
+
+export interface CreatedColor {
+  productId: string;
+  color: AdminProductColor;
+}
+
+export async function createColor(
+  productId: string,
+  input: ColorCreateInput,
+  adminId: string,
+): Promise<CreatedColor> {
+  return prisma.$transaction(async (tx) => {
+    const product = await tx.product.findUnique({
+      where: { id: productId },
+      select: { id: true },
+    });
+    if (!product) {
+      throw new ProductNotFoundError();
+    }
+
+    const duplicate = await tx.color.findFirst({
+      where: {
+        productId,
+        name: { equals: input.name, mode: "insensitive" },
+      },
+      select: { id: true },
+    });
+    if (duplicate) {
+      throw new ColourExistsError();
+    }
+
+    let color: AdminProductColor;
+    try {
+      color = await tx.color.create({
+        data: {
+          productId,
+          name: input.name,
+          stock: input.stock,
+        },
+        select: { id: true, name: true, stock: true },
+      });
+    } catch (error) {
+      if (
+        error instanceof Prisma.PrismaClientKnownRequestError &&
+        error.code === "P2002"
+      ) {
+        throw new ColourExistsError();
+      }
+      throw error;
+    }
+
+    if (color.stock !== 0) {
+      await tx.inventoryLog.create({
+        data: {
+          colorId: color.id,
+          change: color.stock,
+          reason: InventoryReason.ADJUSTMENT,
+          note: ADJUSTMENT_NOTE_COLOUR_CREATE,
+        },
+      });
+    }
+
+    await tx.adminLog.create({
+      data: {
+        adminId,
+        action: COLOUR_CREATE_ACTION,
+        entity: COLOR_ENTITY,
+        entityId: color.id,
+        meta: { name: color.name, stock: color.stock },
+      },
+    });
+
+    return { productId, color };
   });
 }
 
