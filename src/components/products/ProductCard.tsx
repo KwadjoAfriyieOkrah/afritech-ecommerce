@@ -1,16 +1,34 @@
 'use client';
 
-import { useState } from 'react';
+import Link from 'next/link';
+import { useEffect, useRef, useState } from 'react';
 import type { Product } from '@/types';
 import { useCartStore } from '@/store';
 import { formatCedis } from '@/utils/format';
 import { Modal } from '@/components/shared/Modal';
+import { PRODUCT_SPECS } from '@/components/admin/productSpecs';
 
 interface ProductCardProps {
   product: Product;
 }
 
 const MAX_QUANTITY = 10;
+
+function getSpecsCategory(category: string): keyof typeof PRODUCT_SPECS | null {
+  switch (category) {
+    case 'IPHONE':
+    case 'iPhone':
+      return 'IPHONE';
+    case 'SAMSUNG':
+    case 'Samsung':
+      return 'SAMSUNG';
+    case 'LAPTOP':
+    case 'Laptop':
+      return 'LAPTOP';
+    default:
+      return null;
+  }
+}
 
 function stockLabel(stock: number): { text: string; className: string } {
   if (stock <= 0) return { text: 'Out of stock', className: 'bg-stone-100 text-stone-500' };
@@ -25,12 +43,40 @@ export function ProductCard({ product }: ProductCardProps) {
   const [color, setColor] = useState<string | undefined>(product.colors?.[0]);
   const [quantity, setQuantity] = useState(1);
   const [added, setAdded] = useState(false);
+  const [descriptionExpanded, setDescriptionExpanded] = useState(false);
+  const [descriptionOverflows, setDescriptionOverflows] = useState(false);
+  const descriptionRef = useRef<HTMLParagraphElement>(null);
 
   const maxQuantity = Math.max(1, Math.min(MAX_QUANTITY, product.stock));
   const isOutOfStock = product.stock <= 0;
   const soldOut = product.soldOut;
   const stock = stockLabel(product.stock);
   const cannotBuy = isOutOfStock || soldOut;
+  const specsCategory = getSpecsCategory(product.category);
+  const specChips = specsCategory
+    ? PRODUCT_SPECS[specsCategory]
+        .slice(0, 3)
+        .flatMap((field) => {
+          const value = product.specs?.[field.key]?.trim();
+          return value ? [{ key: field.key, label: field.label, value }] : [];
+        })
+    : [];
+
+  useEffect(() => {
+    if (descriptionExpanded || !product.description?.trim()) return;
+
+    const element = descriptionRef.current;
+    if (!element) return;
+
+    const updateOverflow = () => {
+      setDescriptionOverflows(element.scrollHeight > element.clientHeight + 1);
+    };
+
+    updateOverflow();
+    const observer = new ResizeObserver(updateOverflow);
+    observer.observe(element);
+    return () => observer.disconnect();
+  }, [descriptionExpanded, product.description]);
 
   const openModal = () => {
     if (cannotBuy) return;
@@ -82,6 +128,48 @@ export function ProductCard({ product }: ProductCardProps) {
         <span className="badge w-fit bg-light-gold text-dark-gold">{product.category}</span>
 
         <h3 className="font-semibold text-ink">{product.name}</h3>
+
+        {specChips.length > 0 && (
+          <ul className="flex flex-wrap gap-1.5" aria-label="Key specifications">
+            {specChips.map((spec) => (
+              <li
+                key={spec.key}
+                className="rounded-full bg-stone-100 px-2.5 py-1 text-xs text-stone-600"
+              >
+                {spec.label}: {spec.value}
+              </li>
+            ))}
+          </ul>
+        )}
+
+        {product.description?.trim() ? (
+          <p
+            ref={descriptionRef}
+            className={`text-sm text-stone-500 ${
+              descriptionExpanded ? '' : 'line-clamp-2'
+            }`}
+          >
+            {product.description}
+          </p>
+        ) : null}
+        {product.description?.trim() &&
+          (descriptionOverflows || descriptionExpanded) && (
+            <button
+              type="button"
+              onClick={() => setDescriptionExpanded((expanded) => !expanded)}
+              className="w-fit text-xs font-medium text-dark-gold underline underline-offset-2"
+              aria-expanded={descriptionExpanded}
+            >
+              {descriptionExpanded ? 'Show less' : 'Read more'}
+            </button>
+          )}
+
+        <Link
+          href={`/products/${encodeURIComponent(product.id)}`}
+          className="w-fit text-sm font-medium text-dark-gold underline underline-offset-2"
+        >
+          View details
+        </Link>
 
         <p className="text-lg font-bold text-dark-gold">{formatCedis(product.price)}</p>
 

@@ -187,8 +187,12 @@ export async function fetchProducts(filters?: ProductFilters): Promise<Product[]
 export async function getProduct(id: string): Promise<Product> {
   if (isMockApiEnabled()) return mockGetProduct(id);
 
-  const { data } = await api.get<Product>(`/products/${encodeURIComponent(id)}`);
-  return data;
+  const products = await fetchProducts();
+  const product = products.find((candidate) => candidate.id === id);
+  if (!product) {
+    throw new ApiError('Product not found', 404, 'PRODUCT_NOT_FOUND');
+  }
+  return product;
 }
 
 export type AvailabilityStatus = 'ok' | 'insufficient' | 'unavailable';

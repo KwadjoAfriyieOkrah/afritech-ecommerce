@@ -11,11 +11,11 @@ export interface Product {
   name: string;
   price: number;
   colors: string[];
-  specs?: Record<string, string>;
+  specs?: Record<string, string> | null;
   stock: number;
   category: string;
   image: string | null;
-  description?: string;
+  description?: string | null;
   createdAt?: string;
   updatedAt?: string;
   /**

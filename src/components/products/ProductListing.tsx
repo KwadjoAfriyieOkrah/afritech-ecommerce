@@ -28,16 +28,15 @@ export function ProductListing() {
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [category, setCategory] = useState('all');
-  const [minPrice, setMinPrice] = useState(0);
-  const [maxPrice, setMaxPrice] = useState(FALLBACK_MAX_PRICE);
+  const [selectedMaxPrice, setSelectedMaxPrice] = useState<number | null>(null);
 
   const load = useCallback(async () => {
     setIsLoading(true);
     setError(null);
-
     try {
       const data = await fetchProducts();
       setProducts(Array.isArray(data) ? data : []);
+      setError(null);
     } catch (caught) {
       setError(ApiError.from(caught).message);
     } finally {
@@ -46,8 +45,25 @@ export function ProductListing() {
   }, []);
 
   useEffect(() => {
-    void load();
-  }, [load]);
+    let active = true;
+
+    void fetchProducts()
+      .then((data) => {
+        if (!active) return;
+        setProducts(Array.isArray(data) ? data : []);
+        setError(null);
+      })
+      .catch((caught: unknown) => {
+        if (active) setError(ApiError.from(caught).message);
+      })
+      .finally(() => {
+        if (active) setIsLoading(false);
+      });
+
+    return () => {
+      active = false;
+    };
+  }, []);
 
   const categories = useMemo(() => {
     const unique = new Set(products.map((product) => product.category).filter(Boolean));
@@ -60,19 +76,20 @@ export function ProductListing() {
     return { min: Math.floor(Math.min(...prices)), max: Math.ceil(Math.max(...prices)) };
   }, [products]);
 
-  useEffect(() => {
-    setMinPrice(priceBounds.min);
-    setMaxPrice(priceBounds.max);
-  }, [priceBounds.min, priceBounds.max]);
+  const effectiveMaxPrice = Math.min(
+    Math.max(selectedMaxPrice ?? priceBounds.max, priceBounds.min),
+    priceBounds.max
+  );
 
   const visibleProducts = useMemo(
     () =>
       products.filter((product) => {
         const matchesCategory = category === 'all' || product.category === category;
-        const matchesPrice = product.price >= minPrice && product.price <= maxPrice;
+        const matchesPrice =
+          product.price >= priceBounds.min && product.price <= effectiveMaxPrice;
         return matchesCategory && matchesPrice;
       }),
-    [products, category, minPrice, maxPrice]
+    [products, category, priceBounds.min, effectiveMaxPrice]
   );
 
   return (
@@ -102,7 +119,7 @@ export function ProductListing() {
 
             <div className="w-full sm:max-w-xs">
               <label htmlFor="price-range" className="label">
-                Max price: <span className="font-bold text-dark-gold">{formatCedis(maxPrice)}</span>
+                Max price: <span className="font-bold text-dark-gold">{formatCedis(effectiveMaxPrice)}</span>
               </label>
               <input
                 id="price-range"
@@ -110,8 +127,8 @@ export function ProductListing() {
                 min={priceBounds.min}
                 max={priceBounds.max}
                 step={1}
-                value={maxPrice}
-                onChange={(event) => setMaxPrice(Number(event.target.value))}
+                value={effectiveMaxPrice}
+                onChange={(event) => setSelectedMaxPrice(Number(event.target.value))}
                 disabled={isLoading}
                 className="w-full accent-dark-gold"
               />
@@ -139,7 +156,11 @@ export function ProductListing() {
         {!isLoading && error && (
           <div role="alert" className="alert-error flex flex-col items-start gap-3">
             <p>{error}</p>
-            <button type="button" onClick={() => void load()} className="btn btn-outline">
+            <button
+              type="button"
+              onClick={() => void load()}
+              className="btn btn-outline"
+            >
               Retry
             </button>
           </div>
@@ -152,8 +173,7 @@ export function ProductListing() {
               type="button"
               onClick={() => {
                 setCategory('all');
-                setMinPrice(priceBounds.min);
-                setMaxPrice(priceBounds.max);
+                setSelectedMaxPrice(null);
               }}
               className="btn btn-ghost mt-2"
             >
