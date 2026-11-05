@@ -10,13 +10,14 @@
   },
   "dependencies": {
     "@paystack/inline-js": "^2.22.2",
-    "axios": "^1.20.0",
+    "axios": "^1.21.0",
     "clsx": "^2.1.1",
     "dotenv": "^18.0.5",
-    "next": "16.3.8",
+    "next": "^16.4.4",
     "react": "19.2.8",
     "react-dom": "19.2.8",
     "react-icons": "^5.7.0",
+    "redis": "^6.3.1",
     "sonner": "^2.0.8",
     "zustand": "^5.0.15"
   },
@@ -25,10 +26,13 @@
     "@types/node": "^20",
     "@types/react": "^19",
     "@types/react-dom": "^19",
-    "eslint": "^8",
-    "eslint-config-next": "^14.2.35",
+    "eslint": "^9.39.5",
+    "eslint-config-next": "^16.4.4",
     "tailwindcss": "^4",
     "typescript": "^5"
+  },
+  "overrides": {
+    "minimatch": "^11.0.4"
   },
   "packageManager": "yarn@1.22.22+sha1.ac34549e6aa8e7ead463a7407e1c7390f61a6610"
 }
