@@ -1,5 +1,7 @@
 import { rateLimit } from "express-rate-limit";
 
+import { createRateLimitStore } from "./rateLimitStore";
+
 const RATE_LIMIT_MESSAGE = {
   error: "Too many requests. Please try again later.",
 };
@@ -10,6 +12,8 @@ export const orderCreationRateLimit = rateLimit({
   standardHeaders: "draft-8",
   legacyHeaders: false,
   message: RATE_LIMIT_MESSAGE,
+  passOnStoreError: false,
+  store: createRateLimitStore("order-creation"),
 });
 
 export const paymentInitializationRateLimit = rateLimit({
@@ -18,4 +22,6 @@ export const paymentInitializationRateLimit = rateLimit({
   standardHeaders: "draft-8",
   legacyHeaders: false,
   message: RATE_LIMIT_MESSAGE,
+  passOnStoreError: false,
+  store: createRateLimitStore("payment-initialization"),
 });

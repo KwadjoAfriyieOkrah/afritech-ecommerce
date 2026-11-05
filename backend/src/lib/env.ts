@@ -12,6 +12,10 @@ const envSchema = z.object({
   DATABASE_URL: z
     .string()
     .min(1, "DATABASE_URL is required (postgresql://...)"),
+  REDIS_URL: z
+    .string()
+    .url("REDIS_URL must be a valid Redis connection URL")
+    .default("redis://127.0.0.1:6379"),
   JWT_SECRET: z.string().min(32, "JWT_SECRET must be at least 32 characters"),
   PAYSTACK_SECRET_KEY: z.string().min(1, "PAYSTACK_SECRET_KEY is required"),
   GUEST_PAYMENT_EMAIL_DOMAIN: z

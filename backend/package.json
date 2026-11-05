@@ -9,8 +9,9 @@
     "build": "tsc -p tsconfig.json",
     "start": "node dist/src/server.js",
     "typecheck": "tsc -p tsconfig.json --noEmit",
-    "test": "tsx --test tests/payments.test.ts",
+    "test": "tsx --test tests/payments.test.ts tests/rate-limits.test.ts",
     "test:session": "tsx --test tests/auth-cookie.test.ts tests/order-payment-rate-limits.test.ts tests/reject-untrusted-origin.test.ts",
+    "test:redis": "tsx --test tests/redis-rate-limit.test.ts",
     "db:generate": "prisma generate",
     "db:deploy": "prisma migrate deploy",
     "db:seed": "prisma db seed"
@@ -29,6 +30,8 @@
     "express-rate-limit": "^8.7.3",
     "jsonwebtoken": "^9.0.3",
     "multer": "^2.4.0",
+    "rate-limit-redis": "^6.0.2",
+    "redis": "^6.3.1",
     "zod": "^4.6.5"
   },
   "devDependencies": {

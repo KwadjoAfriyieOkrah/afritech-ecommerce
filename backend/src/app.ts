@@ -9,6 +9,11 @@ import deliveryZonesRouter from "./routes/delivery-zones.routes";
 import paymentsRouter from "./routes/payments.routes";
 import adminRouter from "./routes/admin.routes";
 import { handlePaystackWebhook } from "./controllers/paystack-webhook.controller";
+import {
+  loginRateLimit,
+  orderTrackingRateLimit,
+  registrationRateLimit,
+} from "./middleware/rateLimits";
 import { rejectUntrustedOrigin } from "./middleware/rejectUntrustedOrigin";
 
 const app = express();
@@ -25,6 +30,10 @@ app.use(
 );
 
 app.use(rejectUntrustedOrigin);
+
+app.use("/auth/login", loginRateLimit);
+app.use("/auth/register", registrationRateLimit);
+app.use("/orders/track", orderTrackingRateLimit);
 
 app.use(express.json());
 
