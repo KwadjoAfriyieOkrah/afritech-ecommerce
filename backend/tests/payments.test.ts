@@ -3,7 +3,11 @@ import { readFileSync } from "node:fs";
 import path from "node:path";
 import { test } from "node:test";
 
-import { PaymentAttemptStatus, PaymentStatus, Prisma } from "@prisma/client";
+import {
+  PaymentAttemptStatus,
+  PaymentStatus,
+  Prisma,
+} from "../src/generated/prisma/client";
 
 import {
   PAYSTACK_CURRENCY,

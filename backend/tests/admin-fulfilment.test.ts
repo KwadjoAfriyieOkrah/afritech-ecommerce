@@ -9,7 +9,7 @@ import {
   PaymentStatus,
   Prisma,
   Role,
-} from "@prisma/client";
+} from "../src/generated/prisma/client";
 
 const testDatabaseUrl = process.env.DATABASE_URL_TEST;
 if (!testDatabaseUrl) {

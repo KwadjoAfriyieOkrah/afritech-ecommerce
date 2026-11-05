@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
 import type { Server } from "node:http";
-import { Prisma } from "@prisma/client";
+import { Prisma } from "../src/generated/prisma/client";
 import { after, before, test } from "node:test";
 
 const testDatabaseUrl = process.env.DATABASE_URL_TEST;

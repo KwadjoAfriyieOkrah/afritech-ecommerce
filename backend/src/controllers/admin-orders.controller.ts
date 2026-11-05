@@ -1,4 +1,4 @@
-import type { FulfillmentStatus } from "@prisma/client";
+import type { FulfillmentStatus } from "../generated/prisma/client";
 import type { Request, Response } from "express";
 import type { ZodError } from "zod";
 

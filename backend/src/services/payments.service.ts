@@ -3,7 +3,7 @@ import {
   PaymentStatus,
   Prisma,
   ReconciliationReason,
-} from "@prisma/client";
+} from "../generated/prisma/client";
 
 import { env } from "../lib/env";
 import {

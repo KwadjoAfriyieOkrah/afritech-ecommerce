@@ -7,7 +7,7 @@ import type {
   PaymentAttemptStatus as PaymentAttemptStatusType,
   PaymentStatus as PaymentStatusType,
   ReconciliationReason as ReconciliationReasonType,
-} from "@prisma/client";
+} from "../src/generated/prisma/client";
 
 // ---------------------------------------------------------------------------
 // DATABASE_URL_TEST guard. Runs at module load, before any test executes and
@@ -59,7 +59,7 @@ const {
   PaymentStatus,
   Prisma,
   ReconciliationReason,
-} = require("@prisma/client") as typeof import("@prisma/client");
+} = require("../src/generated/prisma/client") as typeof import("../src/generated/prisma/client");
 const appModule = require("../src/app") as typeof import("../src/app");
 
 const app = appModule.default;

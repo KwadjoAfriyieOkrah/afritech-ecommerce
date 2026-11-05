@@ -3,7 +3,7 @@ import {
   InventoryReason,
   PaymentStatus,
   Prisma,
-} from "@prisma/client";
+} from "../generated/prisma/client";
 
 import { prisma } from "../lib/prisma";
 import {
@@ -33,7 +33,7 @@ function trackingWindowClosed(
   );
 }
 
-const orderSelect = Prisma.validator<Prisma.OrderSelect>()({
+const orderSelect = {
   id: true,
   reference: true,
   userId: true,
@@ -60,13 +60,13 @@ const orderSelect = Prisma.validator<Prisma.OrderSelect>()({
       color: { select: { name: true } },
     },
   },
-});
+} satisfies Prisma.OrderSelect;
 
 type OrderRow = Prisma.OrderGetPayload<{ select: typeof orderSelect }>;
 
 // Public tracking selects only what the tracking response needs. It never
 // loads the access token hash, the customer's email or the delivery address.
-const trackSelect = Prisma.validator<Prisma.OrderSelect>()({
+const trackSelect = {
   reference: true,
   customerPhone: true,
   region: true,
@@ -87,7 +87,7 @@ const trackSelect = Prisma.validator<Prisma.OrderSelect>()({
       color: { select: { name: true } },
     },
   },
-});
+} satisfies Prisma.OrderSelect;
 
 // The tracking query selects the same item columns, so the mapper works on the
 // shared shape instead of one specific payload type.
@@ -336,11 +336,11 @@ export async function getOrderForUser(
   return mapOrder(order, expectedDaysByRegion);
 }
 
-const guestOrderSelect = Prisma.validator<Prisma.OrderSelect>()({
+const guestOrderSelect = {
   ...orderSelect,
   accessTokenHash: true,
   deliveredAt: true,
-});
+} satisfies Prisma.OrderSelect;
 
 /**
  * A guest order is identified by its id plus the one-time access token. The

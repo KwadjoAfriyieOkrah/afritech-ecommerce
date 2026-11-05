@@ -1,4 +1,4 @@
-import { FulfillmentStatus } from "@prisma/client";
+import { FulfillmentStatus } from "../generated/prisma/client";
 import { z } from "zod";
 
 const GHANA_PHONE_REGEX = /^0\d{9}$/;

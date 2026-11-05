@@ -48,7 +48,7 @@ console.log(`Test database: ${testDatabaseName}`);
 const { prisma } = require("../src/lib/prisma") as typeof import("../src/lib/prisma");
 const { initializePayment } = require("../src/services/payments.service") as typeof import("../src/services/payments.service");
 const { createOrder } = require("../src/services/orders.service") as typeof import("../src/services/orders.service");
-const { PaymentStatus, Prisma } = require("@prisma/client") as typeof import("@prisma/client");
+const { PaymentStatus, Prisma } = require("../src/generated/prisma/client") as typeof import("../src/generated/prisma/client");
 
 const RESERVATION_MS = 15 * 60 * 1000;
 

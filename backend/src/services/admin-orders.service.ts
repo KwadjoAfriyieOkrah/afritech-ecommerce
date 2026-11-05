@@ -2,7 +2,7 @@ import {
   FulfillmentStatus,
   PaymentStatus,
   Prisma,
-} from "@prisma/client";
+} from "../generated/prisma/client";
 
 import { prisma } from "../lib/prisma";
 import type { AdminRiderCreateInput } from "../validation/admin-orders.schemas";
@@ -20,7 +20,7 @@ export const RIDER_CREATE_ACTION = "RIDER_CREATE";
 const ORDER_ENTITY = "Order";
 const RIDER_ENTITY = "Rider";
 
-const adminOrderListSelect = Prisma.validator<Prisma.OrderSelect>()({
+const adminOrderListSelect = {
   id: true,
   reference: true,
   paymentStatus: true,
@@ -32,9 +32,9 @@ const adminOrderListSelect = Prisma.validator<Prisma.OrderSelect>()({
   total: true,
   riderId: true,
   createdAt: true,
-});
+} satisfies Prisma.OrderSelect;
 
-const adminOrderDetailSelect = Prisma.validator<Prisma.OrderSelect>()({
+const adminOrderDetailSelect = {
   id: true,
   reference: true,
   userId: true,
@@ -71,15 +71,15 @@ const adminOrderDetailSelect = Prisma.validator<Prisma.OrderSelect>()({
       createdAt: true,
     },
   },
-});
+} satisfies Prisma.OrderSelect;
 
-const adminRiderSelect = Prisma.validator<Prisma.RiderSelect>()({
+const adminRiderSelect = {
   id: true,
   name: true,
   phone: true,
   isActive: true,
   createdAt: true,
-});
+} satisfies Prisma.RiderSelect;
 
 type AdminOrderListRow = Prisma.OrderGetPayload<{
   select: typeof adminOrderListSelect;

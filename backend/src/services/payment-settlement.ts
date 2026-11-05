@@ -1,6 +1,10 @@
 import { randomBytes } from "crypto";
 
-import { PaymentAttemptStatus, PaymentStatus, Prisma } from "@prisma/client";
+import {
+  PaymentAttemptStatus,
+  PaymentStatus,
+  Prisma,
+} from "../generated/prisma/client";
 
 import type { PaymentStatusResponse } from "../types/payments";
 

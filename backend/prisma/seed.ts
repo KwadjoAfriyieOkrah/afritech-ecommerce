@@ -1,27 +1,5 @@
-import { PrismaClient, ProductCategory, Role } from "@prisma/client";
-import bcrypt from "bcryptjs";
-
-const prisma = new PrismaClient();
-
-// Development-only seed credential. Never reuse for production; real admin
-// passwords must be set through the auth flow, not committed.
-const SEED_ADMIN_EMAIL = "admin@afritech.com";
-const SEED_ADMIN_PASSWORD = "ChangeMe-S0on!"; // hashed before storage
-
-async function upsertAdmin(): Promise<void> {
-  const passwordHash = await bcrypt.hash(SEED_ADMIN_PASSWORD, 10);
-
-  await prisma.user.upsert({
-    where: { email: SEED_ADMIN_EMAIL },
-    update: {}, // keep existing record untouched on re-seed
-    create: {
-      name: "AFriTech Admin",
-      email: SEED_ADMIN_EMAIL,
-      passwordHash,
-      role: Role.ADMIN,
-    },
-  });
-}
+import { ProductCategory } from "../src/generated/prisma/client";
+import { prisma } from "../src/lib/prisma";
 
 // Product.name is not unique in the schema, so a true upsert has no natural
 // key to target. Find-or-create keeps the seed idempotent by name.
@@ -87,8 +65,6 @@ async function upsertDeliveryZone(input: {
 }
 
 async function main(): Promise<void> {
-  await upsertAdmin();
-
   await upsertDeliveryZone({ name: "Accra", fee: "20.00", expectedDays: 1, isActive: true });
   await upsertDeliveryZone({ name: "Tema", fee: "30.00", expectedDays: 1, isActive: true });
   await upsertDeliveryZone({ name: "Kumasi", fee: "50.00", expectedDays: 3, isActive: true });

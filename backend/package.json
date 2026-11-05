@@ -5,22 +5,28 @@
   "description": "AFriTech e-commerce and POS backend (Express + TypeScript + Prisma)",
   "main": "dist/src/server.js",
   "scripts": {
+    "predev": "prisma generate",
     "dev": "tsx watch src/server.ts",
+    "prebuild": "prisma generate",
     "build": "tsc -p tsconfig.json",
     "start": "node dist/src/server.js",
+    "pretypecheck": "prisma generate",
     "typecheck": "tsc -p tsconfig.json --noEmit",
-    "test": "tsx --test tests/payments.test.ts tests/rate-limits.test.ts",
+    "pretest": "prisma generate",
+    "test": "tsx --test tests/payments.test.ts tests/credential-version.test.ts tests/rate-limits.test.ts",
     "test:session": "tsx --test tests/auth-cookie.test.ts tests/order-payment-rate-limits.test.ts tests/reject-untrusted-origin.test.ts",
     "test:redis": "tsx --test tests/redis-rate-limit.test.ts",
+    "pretest:integration": "prisma generate",
+    "test:integration": "node scripts/run-db-tests.mjs",
+    "admin:provision": "tsx scripts/provision-admin.ts",
+    "admin:reset-password": "tsx scripts/set-admin-password.ts",
     "db:generate": "prisma generate",
     "db:deploy": "prisma migrate deploy",
     "db:seed": "prisma db seed"
   },
-  "prisma": {
-    "seed": "tsx prisma/seed.ts"
-  },
   "dependencies": {
-    "@prisma/client": "^6.19.3",
+    "@prisma/adapter-pg": "^7.10.1",
+    "@prisma/client": "^7.10.1",
     "bcryptjs": "^3.0.3",
     "cloudinary": "^2.11.0",
     "cors": "^2.8.6",
@@ -29,10 +35,11 @@
     "express": "^4.21.2",
     "express-rate-limit": "^8.7.3",
     "jsonwebtoken": "^9.0.3",
-    "multer": "^2.4.0",
+    "multer": "^2.5.0",
+    "pg": "^8.23.1",
     "rate-limit-redis": "^6.0.2",
     "redis": "^6.3.1",
-    "zod": "^4.6.5"
+    "zod": "^4.6.7"
   },
   "devDependencies": {
     "@types/cors": "^2.8.19",
@@ -40,8 +47,12 @@
     "@types/jsonwebtoken": "^9.0.10",
     "@types/multer": "^2.3.0",
     "@types/node": "^20.19.43",
-    "prisma": "^6.19.3",
+    "@types/pg": "^8.23.1",
+    "prisma": "^7.10.1",
     "tsx": "^4.23.15",
     "typescript": "^5.9.3"
+  },
+  "engines": {
+    "node": "^20.19 || ^22.12 || >=24.0"
   }
 }
