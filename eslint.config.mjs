@@ -2,6 +2,7 @@ import nextCoreWebVitals from "eslint-config-next/core-web-vitals";
 import nextTypeScript from "eslint-config-next/typescript";
 
 export default [
+  { ignores: ["backend/**", "out-check.cjs", ".next/**", "out/**", "next-env.d.ts"] },
   ...nextCoreWebVitals,
   ...nextTypeScript,
   {
