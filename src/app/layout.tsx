@@ -1,4 +1,5 @@
 import type { Metadata } from "next";
+import type { ReactNode } from "react";
 import { Poppins } from "next/font/google";
 import { Header } from "@/components/shared/Header";
 import { SessionLoader } from "@/components/auth/SessionLoader";
@@ -18,7 +19,7 @@ export const metadata: Metadata = {
   description: "Shop electronics delivered anywhere in Ghana",
 };
 
-export default function RootLayout({ children }: LayoutProps<"/">) {
+export default function RootLayout({ children }: { children: ReactNode }) {
   return (
     <html lang="en" className={`${poppins.variable} h-full antialiased`}>
       <body className="flex min-h-full flex-col">
