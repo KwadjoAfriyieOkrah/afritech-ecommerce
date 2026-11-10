@@ -51,7 +51,7 @@ async function main(): Promise<void> {
   const passwordHash = await bcrypt.hash(password, BCRYPT_COST);
 
   await prisma.$transaction(async (tx) => {
-    await tx.$queryRaw<unknown[]>`SELECT pg_advisory_xact_lock(${ADMIN_PROVISION_LOCK_ID})`;
+    await tx.$executeRaw`SELECT pg_advisory_xact_lock(${ADMIN_PROVISION_LOCK_ID})`;
 
     const existingAdmin = await tx.user.findFirst({
       where: { role: Role.ADMIN },
@@ -82,7 +82,7 @@ async function main(): Promise<void> {
       },
       select: { id: true },
     });
-  });
+  }, { maxWait: 20000, timeout: 30000 });
 
   console.log("The first admin account was created.");
 }
