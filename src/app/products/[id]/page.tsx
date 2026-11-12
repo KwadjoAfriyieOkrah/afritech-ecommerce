@@ -8,6 +8,7 @@ import { ApiError, getProduct } from '@/services/api';
 import type { Product } from '@/types';
 import { PRODUCT_SPECS } from '@/components/admin/productSpecs';
 import { formatCedis } from '@/utils/format';
+import { HiChevronLeft, HiChevronRight } from 'react-icons/hi';
 
 function getSpecsCategory(category: string): keyof typeof PRODUCT_SPECS | null {
   switch (category) {
@@ -138,9 +139,9 @@ export default function ProductDetailsPage() {
                             gallery.length,
                         })
                       }
-                      className="absolute left-2 top-1/2 -translate-y-1/2 rounded-full bg-white/80 px-3 py-2 text-lg text-ink shadow"
+                      className="absolute left-3 top-1/2 z-10 flex h-10 w-10 -translate-y-1/2 items-center justify-center rounded-full bg-white/90 text-ink shadow-md ring-1 ring-stone-200 transition hover:bg-white focus-visible:outline focus-visible:outline-2 focus-visible:outline-dark-gold"
                     >
-                      &larr;
+                      <HiChevronLeft aria-hidden="true" className="h-5 w-5" />
                     </button>
                     <button
                       type="button"
@@ -151,9 +152,9 @@ export default function ProductDetailsPage() {
                           index: (activeIndex + 1) % gallery.length,
                         })
                       }
-                      className="absolute right-2 top-1/2 -translate-y-1/2 rounded-full bg-white/80 px-3 py-2 text-lg text-ink shadow"
+                      className="absolute right-3 top-1/2 z-10 flex h-10 w-10 -translate-y-1/2 items-center justify-center rounded-full bg-white/90 text-ink shadow-md ring-1 ring-stone-200 transition hover:bg-white focus-visible:outline focus-visible:outline-2 focus-visible:outline-dark-gold"
                     >
-                      &rarr;
+                      <HiChevronRight aria-hidden="true" className="h-5 w-5" />
                     </button>
                   </>
                 )}
@@ -161,7 +162,7 @@ export default function ProductDetailsPage() {
             )}
           </div>
           {gallery.length > 1 && (
-            <div className="flex flex-wrap gap-2">
+            <div className="mt-4 flex gap-3 overflow-x-auto pb-2">
               {gallery.map((image, index) => (
                 <button
                   key={`${image}-${index}`}
@@ -169,7 +170,11 @@ export default function ProductDetailsPage() {
                   aria-label={`Show image ${index + 1}`}
                   aria-current={index === safeIndex ? 'true' : undefined}
                   onClick={() => setGallerySelection({ productId: id, index })}
-                  className="relative h-16 w-16 overflow-hidden rounded-md border border-stone-200 bg-stone-50"
+                  className={`relative h-16 w-16 flex-none overflow-hidden rounded-lg border-2 transition ${
+                    index === safeIndex
+                      ? 'border-dark-gold'
+                      : 'border-stone-200 hover:border-stone-400'
+                  }`}
                 >
                   <Image
                     src={image}
