@@ -72,6 +72,7 @@ export async function listActiveProducts(): Promise<ProductResponse[]> {
       stock,
       colors: product.colors.map((color) => color.name),
       image: product.images[0] ?? null,
+      images: product.images,
       soldOut: stock === 0,
       description: product.description,
       specs: productSpecs(product.specs),
