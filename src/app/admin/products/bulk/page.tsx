@@ -117,6 +117,9 @@ export default function AdminBulkUploadPage() {
 
       <div className="card flex flex-col gap-4 p-5 sm:p-6">
         <div className="flex flex-col gap-2">
+          <a href="/templates/products-template.csv" download className="btn btn-outline mb-4 inline-flex">
+            Download template
+          </a>
           <span className="label">CSV file</span>
           <input
             ref={fileInputRef}
